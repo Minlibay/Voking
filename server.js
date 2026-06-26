@@ -63,7 +63,6 @@ const THIRST = {
 
 // --- Погода (общая для всех) ----------------------------------------------
 const WEATHER = {
-  changeInterval: [45000, 90000],  // как часто меняется погода (мс)
   sporeWarning: (Number(process.env.SPORE_WARNING_SEC) || 15) * 1000,   // предупреждение до волны спор
   sporeDuration: (Number(process.env.SPORE_DURATION_SEC) || 22) * 1000, // длительность волны спор
   sickChancePerSec: 0.06,          // шанс заболеть в грозу за секунду
@@ -93,9 +92,7 @@ let wasNight = false;             // для отслеживания смены 
 
 // Текущая погода: type = clear | heat | rain | spores; phase для спор: warning | active
 let weather = { type: 'clear', phase: null };
-// если погода зафиксирована для теста — применяем сразу, иначе первые 30с ясно
-let weatherUntil = Date.now() + (process.env.FORCE_WEATHER ? 0 : 30000);
-const rand = (a, b) => a + Math.random() * (b - a);
+let weatherUntil = 0;            // используется для фаз спор (предупреждение/волна)
 
 // FORCE_NIGHT=1 — всегда ночь (для тестов и отладки орды)
 const FORCE_NIGHT = process.env.FORCE_NIGHT === '1';
@@ -410,48 +407,69 @@ setInterval(() => {
   }
 }, 1000);
 
-// --- Планировщик погоды ----------------------------------------------------
+// --- Погода: суточный розыгрыш в полдень -----------------------------------
 // FORCE_WEATHER=heat|rain|spores — зафиксировать погоду для теста/отладки.
 const FORCE_WEATHER = process.env.FORCE_WEATHER || null;
 
-function pickWeather() {
-  if (FORCE_WEATHER) return FORCE_WEATHER;
-  let next, tries = 0;
-  do {
-    const r = Math.random();
-    next = r < 0.5 ? 'clear' : r < 0.72 ? 'heat' : r < 0.9 ? 'rain' : 'spores';
-  } while (next === weather.type && next !== 'spores' && ++tries < 4);
-  return next;
+const WEATHER_MSG = {
+  clear: '☀️ Новый день: погода ясная.',
+  heat: '🔥 Новый день: жара — пейте больше, иначе обезвоживание!',
+  rain: '🌧️ Новый день: гроза — можно простудиться.',
+};
+
+const d = (sides) => Math.floor(Math.random() * sides) + 1;   // бросок кости 1..sides
+
+function startSpores() {
+  weather = { type: 'spores', phase: 'warning' };
+  weatherUntil = Date.now() + WEATHER.sporeWarning;
+  broadcast({ type: 'chat', from: 'СИСТЕМА', text: '☠️ Сегодня ядовитые споры! Срочно найдите убежище!' });
+}
+function setDayWeather(type) {
+  weather = { type, phase: null };
+  broadcast({ type: 'chat', from: 'СИСТЕМА', text: WEATHER_MSG[type] });
 }
 
-const WEATHER_MSG = {
-  clear: '☀️ Погода прояснилась.',
-  heat: '🔥 Наступила жара — пейте больше, иначе обезвоживание!',
-  rain: '🌧️ Началась гроза — можно простудиться.',
-};
+// Розыгрыш погоды на сутки: независимые броски (повтор возможен).
+// Споры 1к20, жара 1к15, гроза 1к10 — проверяются от самого редкого к частому.
+function rollDailyWeather() {
+  if (FORCE_WEATHER) {
+    if (FORCE_WEATHER === 'spores') startSpores(); else setDayWeather(FORCE_WEATHER);
+    return;
+  }
+  if (d(20) === 1) startSpores();
+  else if (d(15) === 1) setDayWeather('heat');
+  else if (d(10) === 1) setDayWeather('rain');
+  else setDayWeather('clear');
+}
+
+let lastRolledCycle = -1;
 
 setInterval(() => {
   const now = Date.now();
-  if (now < weatherUntil) return;
+  const cycle = Math.floor(now / DAY_LENGTH_MS);
+  const t = (now % DAY_LENGTH_MS) / DAY_LENGTH_MS;
 
-  if (weather.type === 'spores' && weather.phase === 'warning') {
-    weather = { type: 'spores', phase: 'active' };
-    weatherUntil = now + WEATHER.sporeDuration;
-    broadcast({ type: 'chat', from: 'СИСТЕМА', text: '☠️ ВОЛНА ЯДОВИТЫХ СПОР! Вне убежища — смерть!' });
-    return;
+  // раз в сутки в полдень (t=0.5) разыгрываем погоду на день
+  if (cycle !== lastRolledCycle && t >= 0.5) {
+    lastRolledCycle = cycle;
+    rollDailyWeather();
   }
 
-  const next = pickWeather();
-  if (next === 'spores') {
-    weather = { type: 'spores', phase: 'warning' };
-    weatherUntil = now + WEATHER.sporeWarning;
-    broadcast({ type: 'chat', from: 'СИСТЕМА', text: '☠️ Приближаются ядовитые споры! Срочно найдите убежище!' });
-  } else {
-    weather = { type: next, phase: null };
-    weatherUntil = now + rand(WEATHER.changeInterval[0], WEATHER.changeInterval[1]);
-    broadcast({ type: 'chat', from: 'СИСТЕМА', text: WEATHER_MSG[next] });
+  // продвижение фаз спор (предупреждение -> волна -> ясно до следующего полудня)
+  if (weather.type === 'spores' && now >= weatherUntil) {
+    if (weather.phase === 'warning') {
+      weather = { type: 'spores', phase: 'active' };
+      weatherUntil = now + WEATHER.sporeDuration;
+      broadcast({ type: 'chat', from: 'СИСТЕМА', text: '☠️ ВОЛНА ЯДОВИТЫХ СПОР! Вне убежища — смерть!' });
+    } else {
+      weather = { type: 'clear', phase: null };
+    }
   }
 }, 1000);
+
+// первый розыгрыш сразу при старте сервера
+rollDailyWeather();
+lastRolledCycle = Math.floor(Date.now() / DAY_LENGTH_MS);
 
 // --- Спавн орды зомби и смена дня/ночи (раз в 1.5с) -------------------------
 setInterval(() => {
