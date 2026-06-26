@@ -19,6 +19,17 @@ const TICK_RATE = 20;            // сколько раз в секунду ра
 const PLAYER_RADIUS = 18;
 const SPAWN = { x: WORLD.width / 2, y: WORLD.height / 2 };
 
+// --- Цикл дня/ночи ---------------------------------------------------------
+// Длина полных игровых суток в реальных секундах (по умолчанию 10 минут).
+const DAY_LENGTH_MS = (Number(process.env.DAY_LENGTH_SEC) || 600) * 1000;
+
+// Текущее игровое время суток: { hour, minute, t } где t — доля суток [0,1)
+function worldTime() {
+  const t = (Date.now() % DAY_LENGTH_MS) / DAY_LENGTH_MS;
+  const totalMinutes = Math.floor(t * 24 * 60);
+  return { hour: Math.floor(totalMinutes / 60), minute: totalMinutes % 60, t };
+}
+
 // --- Параметры выживания (на 1 секунду) -----------------------------------
 const SURVIVAL = {
   hungerDecay: 0.4,       // голод убывает
@@ -263,7 +274,7 @@ setInterval(() => {
       health: Math.round(p.health), hunger: Math.round(p.hunger), energy: Math.round(p.energy),
     });
   }
-  broadcast({ type: 'state', players: snapshot });
+  broadcast({ type: 'state', players: snapshot, time: worldTime() });
 }, 1000 / TICK_RATE);
 
 // Множитель скорости выживания (для тестов/балансировки): SURVIVAL_SPEED=60 ускоряет

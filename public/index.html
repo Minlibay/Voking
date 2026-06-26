@@ -67,6 +67,7 @@
   <div id="hud" style="display:none">
     <span id="whoami" style="color:#facc15;font-weight:600"></span>
     &nbsp;·&nbsp; Онлайн: <b id="count">1</b>
+    &nbsp;·&nbsp; <span id="clock" title="Игровое время">🕛 00:00</span>
     &nbsp; <button id="logoutBtn" style="font:inherit;pointer-events:auto;cursor:pointer;background:rgba(233,69,96,0.25);color:#fff;border:1px solid rgba(233,69,96,0.5);border-radius:7px;padding:2px 8px;font-size:0.78rem">Выйти</button>
   </div>
 
@@ -163,6 +164,7 @@
             document.getElementById('whoami').textContent = mine.name;
             updateSurvivalHud(mine);
           }
+          if (msg.time) updateClock(msg.time);
         } else if (msg.type === 'death') {
           // сервер возродил персонажа — телепортируемся на спаун и показываем экран
           me.x = msg.x; me.y = msg.y;
@@ -176,6 +178,20 @@
       };
 
       ws.onclose = () => addMessage('СИСТЕМА', 'Соединение с сервером потеряно');
+    }
+
+    // --- Часы и цикл дня/ночи ----------------------------------------------
+    let nightDarkness = 0;          // 0 — день, до ~0.6 — глубокая ночь
+    function updateClock(time) {
+      const hh = String(time.hour).padStart(2, '0');
+      const mm = String(time.minute).padStart(2, '0');
+      const night = time.hour < 6 || time.hour >= 20;
+      const icon = night ? '🌙' : '☀️';
+      const phase = night ? 'Ночь' : 'День';
+      document.getElementById('clock').textContent = `${icon} ${hh}:${mm} · ${phase}`;
+      // высота «солнца»: максимум в полдень (t=0.5), минимум в полночь
+      const elevation = Math.sin((time.t - 0.25) * Math.PI * 2);
+      nightDarkness = Math.max(0, -elevation) * 0.6;
     }
 
     // --- Шкалы выживания ---------------------------------------------------
@@ -402,6 +418,12 @@
       if (anim.size > players.length + 5) {
         const live = new Set(players.map(p => p.id));
         for (const id of anim.keys()) if (!live.has(id)) anim.delete(id);
+      }
+
+      // затемнение ночью (синеватая вуаль поверх всей сцены)
+      if (nightDarkness > 0.01) {
+        ctx.fillStyle = `rgba(8, 14, 38, ${nightDarkness})`;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
       }
     }
 
