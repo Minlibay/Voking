@@ -71,8 +71,8 @@
   </div>
 
   <script>
-    // Если уже авторизован — сразу в игру
-    if (localStorage.getItem('voking_token')) location.href = '/';
+    // Если уже авторизован — сразу к выбору персонажа
+    if (localStorage.getItem('voking_token')) location.href = '/characters.html';
 
     let mode = 'login';   // 'login' | 'register'
     const tabLogin = document.getElementById('tabLogin');
@@ -112,11 +112,11 @@
           msg.textContent = data.error;
           msg.className = 'msg error';
         } else {
-          msg.textContent = 'Готово! Заходим в мир…';
+          msg.textContent = 'Готово! Выбираем персонажа…';
           msg.className = 'msg ok';
           localStorage.setItem('voking_token', data.token);
-          localStorage.setItem('voking_name', data.username);
-          setTimeout(() => location.href = '/', 500);
+          localStorage.setItem('voking_account', data.username);
+          setTimeout(() => location.href = '/characters.html', 500);
         }
       } catch {
         msg.textContent = 'Ошибка соединения с сервером';

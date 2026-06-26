@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Voking Online — выбор персонажа</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "Segoe UI", system-ui, sans-serif; color: #eaeaea; min-height: 100vh;
+      background: radial-gradient(circle at 50% 20%, #16213e, #0d1117); padding: 28px 16px 60px;
+    }
+    .top { max-width: 720px; margin: 0 auto 18px; display: flex; align-items: center; justify-content: space-between; }
+    .top h1 { font-size: 1.7rem; }
+    .top .acc { font-size: 0.85rem; opacity: 0.7; }
+    .top button {
+      font: inherit; font-size: 0.8rem; padding: 6px 12px; border-radius: 9px; cursor: pointer;
+      background: rgba(233,69,96,0.2); color: #fff; border: 1px solid rgba(233,69,96,0.5);
+    }
+
+    .wrap { max-width: 720px; margin: 0 auto; }
+    h2 { font-size: 1.05rem; margin: 24px 0 12px; opacity: 0.85; }
+
+    .chars { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+    .char {
+      background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 14px; padding: 16px; text-align: center; cursor: pointer;
+      transition: transform .12s, border-color .2s; position: relative;
+    }
+    .char:hover { transform: translateY(-3px); border-color: rgba(255,255,255,0.35); }
+    .char .ava { font-size: 2.4rem; line-height: 1; }
+    .char .nm { font-weight: 700; margin-top: 8px; }
+    .char .cl { font-size: 0.8rem; opacity: 0.7; }
+    .char .lv { font-size: 0.72rem; opacity: 0.5; margin-top: 2px; }
+    .char .del {
+      position: absolute; top: 6px; right: 8px; font-size: 0.9rem; opacity: 0.4;
+      background: none; border: none; color: #fff; cursor: pointer;
+    }
+    .char .del:hover { opacity: 1; color: #fb7185; }
+    .empty { opacity: 0.5; font-size: 0.9rem; padding: 10px 0; }
+
+    /* Создание */
+    .create { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; padding: 20px; margin-top: 12px; }
+    .classes { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px,1fr)); gap: 10px; margin: 10px 0 16px; }
+    .cls {
+      border: 2px solid rgba(255,255,255,0.12); border-radius: 12px; padding: 12px 8px; text-align: center;
+      cursor: pointer; transition: border-color .15s, background .15s;
+    }
+    .cls:hover { background: rgba(255,255,255,0.05); }
+    .cls.sel { border-color: #e94560; background: rgba(233,69,96,0.1); }
+    .cls .i { font-size: 1.7rem; }
+    .cls .n { font-size: 0.85rem; margin-top: 4px; font-weight: 600; }
+
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    input {
+      font: inherit; padding: 10px 14px; border-radius: 11px; color: #fff; flex: 1; min-width: 180px;
+      border: 1px solid rgba(255,255,255,0.15); background: rgba(0,0,0,0.25);
+    }
+    input:focus { outline: none; border-color: #e94560; }
+    .primary {
+      font: inherit; font-weight: 600; padding: 10px 22px; border-radius: 11px; cursor: pointer;
+      border: none; background: #e94560; color: #fff;
+    }
+    .primary:hover { background: #ff5670; }
+    .primary:disabled { opacity: 0.5; cursor: default; }
+    .msg { margin-top: 12px; font-size: 0.85rem; min-height: 1.1em; }
+    .msg.error { color: #fb7185; }
+  </style>
+</head>
+<body>
+  <div class="top">
+    <h1>🌍 Выбор персонажа</h1>
+    <div>
+      <span class="acc" id="acc"></span>
+      <button id="logout">Сменить аккаунт</button>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <h2>Твои персонажи</h2>
+    <div class="chars" id="chars"></div>
+    <div class="empty" id="empty" style="display:none">Персонажей пока нет — создай первого ниже.</div>
+
+    <h2>Создать персонажа</h2>
+    <div class="create">
+      <div class="classes" id="classes"></div>
+      <div class="row">
+        <input id="charName" maxlength="16" placeholder="Имя персонажа (только буквы)" autocomplete="off" />
+        <button class="primary" id="createBtn">Создать</button>
+      </div>
+      <div class="msg" id="msg"></div>
+    </div>
+  </div>
+
+  <script>
+    const token = localStorage.getItem('voking_token');
+    if (!token) location.href = '/login.html';
+    document.getElementById('acc').textContent = 'Аккаунт: ' + (localStorage.getItem('voking_account') || '');
+
+    const charsEl = document.getElementById('chars');
+    const emptyEl = document.getElementById('empty');
+    const classesEl = document.getElementById('classes');
+    const msgEl = document.getElementById('msg');
+    const nameInput = document.getElementById('charName');
+    const createBtn = document.getElementById('createBtn');
+
+    let selectedClass = null;
+
+    async function api(path, extra = {}) {
+      const res = await fetch('/api/' + path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, ...extra }),
+      });
+      return res.json();
+    }
+
+    function enterWorld(charId) {
+      localStorage.setItem('voking_char', charId);
+      location.href = '/';
+    }
+
+    async function refresh() {
+      const data = await api('characters/list');
+      const chars = data.characters || [];
+      charsEl.innerHTML = '';
+      emptyEl.style.display = chars.length ? 'none' : 'block';
+
+      chars.forEach(c => {
+        const card = document.createElement('div');
+        card.className = 'char';
+        card.title = 'Войти в мир за ' + c.name;
+        card.innerHTML = `
+          <button class="del" title="Удалить">✕</button>
+          <div class="ava" style="filter:drop-shadow(0 0 6px ${c.color})">${c.icon}</div>
+          <div class="nm" style="color:${c.color}"></div>
+          <div class="cl"></div>
+          <div class="lv">Уровень ${c.level}</div>`;
+        card.querySelector('.nm').textContent = c.name;
+        card.querySelector('.cl').textContent = c.className;
+        card.addEventListener('click', () => enterWorld(c.id));
+        card.querySelector('.del').addEventListener('click', async (e) => {
+          e.stopPropagation();
+          if (confirm(`Удалить персонажа ${c.name}? Это навсегда.`)) {
+            await api('characters/delete', { id: c.id });
+            refresh();
+          }
+        });
+        charsEl.appendChild(card);
+      });
+    }
+
+    // Загружаем список классов из общих данных, продублированных тут для UI
+    const CLASSES = {
+      warrior:  { name: 'Воин',         color: '#c79c6e', icon: '⚔️' },
+      mage:     { name: 'Маг',          color: '#69ccf0', icon: '🔮' },
+      rogue:    { name: 'Разбойник',    color: '#fff569', icon: '🗡️' },
+      priest:   { name: 'Жрец',         color: '#f0f0f0', icon: '✨' },
+      hunter:   { name: 'Охотник',      color: '#abd473', icon: '🏹' },
+      warlock:  { name: 'Чернокнижник', color: '#9482c9', icon: '💀' },
+    };
+    for (const [key, c] of Object.entries(CLASSES)) {
+      const el = document.createElement('div');
+      el.className = 'cls';
+      el.innerHTML = `<div class="i">${c.icon}</div><div class="n" style="color:${c.color}">${c.name}</div>`;
+      el.addEventListener('click', () => {
+        selectedClass = key;
+        document.querySelectorAll('.cls').forEach(x => x.classList.remove('sel'));
+        el.classList.add('sel');
+      });
+      classesEl.appendChild(el);
+    }
+
+    createBtn.addEventListener('click', async () => {
+      msgEl.textContent = ''; msgEl.className = 'msg';
+      if (!selectedClass) { msgEl.textContent = 'Выбери класс'; msgEl.className = 'msg error'; return; }
+      createBtn.disabled = true;
+      const data = await api('characters/create', { name: nameInput.value.trim(), klass: selectedClass });
+      createBtn.disabled = false;
+      if (data.error) {
+        msgEl.textContent = data.error; msgEl.className = 'msg error';
+      } else {
+        nameInput.value = '';
+        await refresh();
+      }
+    });
+    nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') createBtn.click(); });
+
+    document.getElementById('logout').addEventListener('click', () => {
+      localStorage.removeItem('voking_token');
+      localStorage.removeItem('voking_char');
+      location.href = '/login.html';
+    });
+
+    refresh();
+  </script>
+</body>
+</html>

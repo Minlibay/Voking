@@ -8,6 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const { WebSocketServer } = require('ws');
 const auth = require('./auth');
+const characters = require('./characters');
 
 const PORT = process.env.PORT || 3000;
 
@@ -15,7 +16,6 @@ const PORT = process.env.PORT || 3000;
 const WORLD = { width: 2000, height: 2000 };
 const TICK_RATE = 20;            // сколько раз в секунду рассылаем состояние мира
 const PLAYER_RADIUS = 18;
-const COLORS = ['#e94560', '#4ade80', '#facc15', '#38bdf8', '#a78bfa', '#fb923c', '#f472b6', '#2dd4bf'];
 
 // --- Состояние --------------------------------------------------------------
 const players = new Map();        // id -> { id, name, x, y, color, dir, ws }
@@ -66,6 +66,25 @@ const server = http.createServer(async (req, res) => {
       const result = auth.login(body.username, body.password);
       return sendJson(res, result.error ? 401 : 200, result);
     }
+
+    // --- Дальше идут методы, требующие действующего токена -----------------
+    const account = auth.verifyToken(body.token);
+    if (urlPath.startsWith('/api/characters/')) {
+      if (!account) return sendJson(res, 401, { error: 'Нужна авторизация' });
+
+      if (urlPath === '/api/characters/list') {
+        return sendJson(res, 200, { characters: characters.listByOwner(account) });
+      }
+      if (urlPath === '/api/characters/create') {
+        const result = characters.create(account, body.name, body.klass);
+        return sendJson(res, result.error ? 400 : 200, result);
+      }
+      if (urlPath === '/api/characters/delete') {
+        const result = characters.remove(body.id, account);
+        return sendJson(res, result.error ? 400 : 200, result);
+      }
+    }
+
     return sendJson(res, 404, { error: 'Неизвестный метод API' });
   }
 
@@ -114,27 +133,36 @@ wss.on('connection', (ws) => {
 
     switch (msg.type) {
       case 'join': {
-        // имя берём не из клиента, а из проверенного токена сессии
-        const name = auth.verifyToken(msg.token);
-        if (!name) {
+        // 1) проверяем токен -> аккаунт
+        const account = auth.verifyToken(msg.token);
+        if (!account) {
           send(ws, { type: 'authError', message: 'Сессия недействительна, войдите заново' });
           ws.close();
           break;
         }
+        // 2) проверяем, что выбранный персонаж принадлежит этому аккаунту
+        const character = characters.getOwned(msg.characterId, account);
+        if (!character) {
+          send(ws, { type: 'authError', message: 'Персонаж не найден' });
+          ws.close();
+          break;
+        }
+        // 3) грузим сохранённую позицию (или ставим в центр мира при первом входе)
+        const cls = characters.CLASSES[character.klass];
         player = {
           id,
-          name,
-          x: Math.random() * WORLD.width,
-          y: Math.random() * WORLD.height,
-          color: COLORS[id % COLORS.length],
+          charId: character.id,
+          name: character.name,
+          x: character.x == null ? WORLD.width / 2 : character.x,
+          y: character.y == null ? WORLD.height / 2 : character.y,
+          color: cls.color,
           dir: 0,
           ws,
         };
         players.set(id, player);
 
-        // сообщаем игроку его id и параметры мира
-        send(ws, { type: 'welcome', id, world: WORLD, radius: PLAYER_RADIUS });
-        broadcast({ type: 'chat', from: 'СИСТЕМА', text: `${name} зашёл в мир` });
+        send(ws, { type: 'welcome', id, world: WORLD, radius: PLAYER_RADIUS, x: player.x, y: player.y });
+        broadcast({ type: 'chat', from: 'СИСТЕМА', text: `${player.name} зашёл в мир` });
         break;
       }
 
@@ -158,6 +186,8 @@ wss.on('connection', (ws) => {
 
   ws.on('close', () => {
     if (player) {
+      // сохраняем позицию персонажа, чтобы при следующем входе он был там же
+      characters.savePosition(player.charId, Math.round(player.x), Math.round(player.y));
       players.delete(id);
       broadcast({ type: 'chat', from: 'СИСТЕМА', text: `${player.name} вышел` });
     }
@@ -174,6 +204,13 @@ setInterval(() => {
   }
   broadcast({ type: 'state', players: snapshot });
 }, 1000 / TICK_RATE);
+
+// Раз в 15 секунд сохраняем позиции активных персонажей
+setInterval(() => {
+  for (const p of players.values()) {
+    characters.savePosition(p.charId, Math.round(p.x), Math.round(p.y));
+  }
+}, 15000);
 
 server.listen(PORT, () => {
   console.log(`\n  🌍 Voking Online запущен`);

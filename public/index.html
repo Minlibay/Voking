@@ -81,11 +81,11 @@
 
     // --- Подключение -------------------------------------------------------
     let ws;
-    function connect(token) {
+    function connect(token, characterId) {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
       ws = new WebSocket(`${proto}://${location.host}`);
 
-      ws.onopen = () => ws.send(JSON.stringify({ type: 'join', token }));
+      ws.onopen = () => ws.send(JSON.stringify({ type: 'join', token, characterId }));
 
       ws.onmessage = (e) => {
         const msg = JSON.parse(e.data);
@@ -97,18 +97,15 @@
           myId = msg.id;
           world = msg.world;
           radius = msg.radius;
-          const self = msg; // позиция придёт со снимком; пока центр мира
-          me.x = world.width / 2;
-          me.y = world.height / 2;
+          // сервер прислал сохранённую позицию персонажа
+          me.x = msg.x;
+          me.y = msg.y;
           startGame();
         } else if (msg.type === 'state') {
           players = msg.players;
           document.getElementById('count').textContent = players.length;
-          // синхронизируем нашу серверную позицию при первом снимке
           const mine = players.find(p => p.id === myId);
-          if (mine && me.x === world.width / 2 && me.y === world.height / 2 && !me._synced) {
-            me.x = mine.x; me.y = mine.y; me._synced = true;
-          }
+          if (mine) document.getElementById('whoami').textContent = mine.name;
         } else if (msg.type === 'chat') {
           addMessage(msg.from, msg.text);
         }
@@ -135,24 +132,40 @@
     }
 
     const chatInput = document.getElementById('chatInput');
+    let chatFocused = false;
+
+    function clearKeys() { for (const k in keys) keys[k] = false; }
+
+    // Пока чат в фокусе — управление не двигает персонажа; клавиши сброшены,
+    // чтобы после выхода из чата ничего не «залипало».
+    chatInput.addEventListener('focus', () => { chatFocused = true; clearKeys(); });
+    chatInput.addEventListener('blur', () => { chatFocused = false; clearKeys(); });
+
     chatInput.addEventListener('keydown', (e) => {
       e.stopPropagation();
-      if (e.key === 'Enter' && chatInput.value.trim()) {
-        ws.send(JSON.stringify({ type: 'chat', text: chatInput.value.trim() }));
+      if (e.key === 'Enter') {
+        const text = chatInput.value.trim();
+        if (text) ws.send(JSON.stringify({ type: 'chat', text }));
         chatInput.value = '';
-        chatInput.blur();
+        chatInput.blur();          // всегда возвращаем управление в игру
       } else if (e.key === 'Escape') {
+        chatInput.value = '';
         chatInput.blur();
       }
     });
 
     // --- Управление --------------------------------------------------------
     window.addEventListener('keydown', (e) => {
-      if (document.activeElement === chatInput) return;
-      if (e.key === 'Enter') { chatInput.focus(); e.preventDefault(); return; }
+      if (chatFocused) return;     // печатаем в чат — не управляем персонажем
+      if (e.key === 'Enter') { e.preventDefault(); chatInput.focus(); return; }
       keys[e.key.toLowerCase()] = true;
     });
-    window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+    window.addEventListener('keyup', (e) => {
+      if (chatFocused) return;
+      keys[e.key.toLowerCase()] = false;
+    });
+    // Если окно потеряло фокус (alt-tab) — сбрасываем клавиши
+    window.addEventListener('blur', clearKeys);
 
     // --- Игровой цикл ------------------------------------------------------
     let lastSent = 0;
@@ -246,21 +259,27 @@
       requestAnimationFrame(loop);
     }
 
-    // --- Вход по аккаунту --------------------------------------------------
+    // --- Вход по аккаунту и персонажу --------------------------------------
+    // authError -> сбрасываем сессию и на страницу входа
     function logout() {
       localStorage.removeItem('voking_token');
-      localStorage.removeItem('voking_name');
+      localStorage.removeItem('voking_char');
       location.href = '/login.html';
     }
-    document.getElementById('logoutBtn').addEventListener('click', logout);
+    // Кнопка «Выйти» возвращает к выбору персонажа (как в WoW)
+    document.getElementById('logoutBtn').addEventListener('click', () => {
+      location.href = '/characters.html';
+    });
 
-    // Требуем авторизацию: без токена — на страницу входа
+    // Требуем токен и выбранного персонажа
     const token = localStorage.getItem('voking_token');
+    const charId = localStorage.getItem('voking_char');
     if (!token) {
       location.href = '/login.html';
+    } else if (!charId) {
+      location.href = '/characters.html';
     } else {
-      document.getElementById('whoami').textContent = localStorage.getItem('voking_name') || '';
-      connect(token);
+      connect(token, charId);
     }
   </script>
 </body>
