@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Voking Online — админка</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: "Segoe UI", system-ui, sans-serif; color: #eaeaea; background: #0d1117; padding: 24px 16px 80px; }
+    .wrap { max-width: 860px; margin: 0 auto; }
+    .top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; }
+    .top h1 { font-size: 1.6rem; }
+    .top a { color: #38bdf8; font-size: 0.9rem; text-decoration: none; }
+
+    .card { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.1); border-radius: 14px; padding: 20px; margin-bottom: 18px; }
+    .card h2 { font-size: 1.1rem; margin-bottom: 14px; }
+    .card p.hint { font-size: 0.82rem; opacity: 0.6; margin-bottom: 14px; }
+
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; }
+    .slot { border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; padding: 12px; text-align: center; }
+    .slot .thumb { width: 100%; height: 110px; border-radius: 8px; background: #161b22 repeating-linear-gradient(45deg,#161b22,#161b22 8px,#1b222c 8px,#1b222c 16px); display: flex; align-items: center; justify-content: center; overflow: hidden; margin-bottom: 8px; }
+    .slot .thumb img { max-width: 100%; max-height: 100%; }
+    .slot .nm { font-weight: 600; font-size: 0.9rem; margin-bottom: 8px; }
+
+    input[type=text], input[type=number] { font: inherit; padding: 8px 10px; border-radius: 9px; color: #fff; border: 1px solid rgba(255,255,255,0.15); background: rgba(0,0,0,0.25); width: 100%; }
+    input[type=color] { width: 48px; height: 36px; border: none; border-radius: 8px; background: none; cursor: pointer; }
+    input[type=file] { font-size: 0.78rem; width: 100%; }
+    label.sm { font-size: 0.75rem; opacity: 0.7; display: block; margin: 8px 0 4px; }
+
+    button { font: inherit; font-weight: 600; padding: 8px 16px; border-radius: 10px; border: none; background: #e94560; color: #fff; cursor: pointer; }
+    button:hover { background: #ff5670; }
+    button.sec { background: rgba(255,255,255,0.1); }
+    button.sec:hover { background: rgba(255,255,255,0.2); }
+    button.del { background: rgba(233,69,96,0.25); border: 1px solid rgba(233,69,96,0.5); padding: 3px 9px; font-size: 0.78rem; }
+
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .msg { font-size: 0.82rem; margin-top: 10px; min-height: 1em; }
+    .msg.error { color: #fb7185; } .msg.ok { color: #4ade80; }
+
+    #map { background: #14241a; border: 1px solid rgba(255,255,255,0.15); border-radius: 10px; cursor: crosshair; touch-action: none; }
+    .objlist { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+    .objlist .o { display: flex; align-items: center; gap: 10px; font-size: 0.85rem; background: rgba(255,255,255,0.04); padding: 6px 10px; border-radius: 8px; }
+    .objlist .o img { width: 28px; height: 28px; object-fit: contain; }
+    .pill { display: inline-block; padding: 6px 10px; border-radius: 8px; background: rgba(255,255,255,0.06); cursor: pointer; border: 2px solid transparent; }
+    .pill.sel { border-color: #e94560; }
+    .pill img { width: 26px; height: 26px; object-fit: contain; vertical-align: middle; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <h1>🛠️ Админка мира</h1>
+    <a href="/characters.html">← К персонажам</a>
+  </div>
+
+  <!-- Спрайты героев -->
+  <div class="card">
+    <h2>🦸 Спрайты героев</h2>
+    <p class="hint">Загрузи картинку класса (лучше PNG с прозрачным фоном, персонаж в полный рост). Заменяет рисованную фигурку у всех игроков этого класса.</p>
+    <div class="grid" id="classGrid"></div>
+    <div class="msg" id="spriteMsg"></div>
+  </div>
+
+  <!-- Земля -->
+  <div class="card">
+    <h2>🌱 Земля (текстура тайлов)</h2>
+    <p class="hint">Два цвета чередуются в шахматном порядке.</p>
+    <div class="row">
+      <label class="sm">Цвет A</label><input type="color" id="colorA" />
+      <label class="sm">Цвет B</label><input type="color" id="colorB" />
+      <button id="saveGround">Сохранить</button>
+    </div>
+    <div class="msg" id="groundMsg"></div>
+  </div>
+
+  <!-- Объекты -->
+  <div class="card">
+    <h2>🌳 Объекты на карте</h2>
+    <p class="hint">1) Загрузи спрайт объекта. 2) Выбери его и кликни по карте, чтобы поставить.</p>
+
+    <div class="row">
+      <input type="text" id="objName" placeholder="название (tree, rock…)" style="max-width:200px" />
+      <input type="file" id="objFile" accept="image/*" style="max-width:240px" />
+      <button id="uploadObj">Загрузить спрайт</button>
+    </div>
+    <div class="msg" id="objUpMsg"></div>
+
+    <label class="sm">Доступные спрайты (выбери, чем ставить):</label>
+    <div class="row" id="spritePills"></div>
+
+    <label class="sm">Масштаб объекта: <span id="scaleVal">1.0</span></label>
+    <input type="range" id="scale" min="0.3" max="3" step="0.1" value="1" style="width:220px" />
+
+    <div style="margin-top:12px">
+      <canvas id="map" width="320" height="320"></canvas>
+    </div>
+    <div class="msg" id="placeMsg"></div>
+
+    <div class="objlist" id="objList"></div>
+  </div>
+</div>
+
+<script>
+  const token = localStorage.getItem('voking_token');
+  if (!token) location.href = '/login.html';
+
+  const CLASSES = {
+    warrior: { name: 'Воин', icon: '⚔️' }, mage: { name: 'Маг', icon: '🔮' },
+    rogue: { name: 'Разбойник', icon: '🗡️' }, priest: { name: 'Жрец', icon: '✨' },
+    hunter: { name: 'Охотник', icon: '🏹' }, warlock: { name: 'Чернокнижник', icon: '💀' },
+  };
+  const WORLD = { width: 2000, height: 2000 };
+  let config = null;
+  let selectedSprite = null;
+
+  async function api(path, extra = {}) {
+    const res = await fetch('/api/admin/' + path, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, ...extra }),
+    });
+    return res.json();
+  }
+  function fileToDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader(); r.onload = () => resolve(r.result); r.onerror = reject; r.readAsDataURL(file);
+    });
+  }
+  function setMsg(el, text, ok) { el.textContent = text; el.className = 'msg ' + (ok ? 'ok' : 'error'); }
+
+  // --- Спрайты героев ---
+  function renderClasses() {
+    const grid = document.getElementById('classGrid');
+    grid.innerHTML = '';
+    for (const [key, c] of Object.entries(CLASSES)) {
+      const url = config.classSprites[key];
+      const slot = document.createElement('div');
+      slot.className = 'slot';
+      slot.innerHTML = `
+        <div class="thumb">${url ? `<img src="${url}">` : `<span style="font-size:2rem">${c.icon}</span>`}</div>
+        <div class="nm">${c.icon} ${c.name}</div>
+        <input type="file" accept="image/*">
+        <button class="sec" style="margin-top:8px;width:100%">Загрузить</button>`;
+      const file = slot.querySelector('input');
+      slot.querySelector('button').addEventListener('click', async () => {
+        if (!file.files[0]) return setMsg(document.getElementById('spriteMsg'), 'Выбери файл для ' + c.name, false);
+        const dataUrl = await fileToDataUrl(file.files[0]);
+        const r = await api('upload-sprite', { klass: key, dataUrl });
+        if (r.error) return setMsg(document.getElementById('spriteMsg'), r.error, false);
+        config = r.config;
+        renderClasses();
+        setMsg(document.getElementById('spriteMsg'), `Спрайт «${c.name}» обновлён`, true);
+      });
+      grid.appendChild(slot);
+    }
+  }
+
+  // --- Земля ---
+  document.getElementById('saveGround').addEventListener('click', async () => {
+    const r = await api('set-ground', { colorA: document.getElementById('colorA').value, colorB: document.getElementById('colorB').value });
+    if (r.error) return setMsg(document.getElementById('groundMsg'), r.error, false);
+    config = r.config;
+    setMsg(document.getElementById('groundMsg'), 'Земля обновлена — игроки уже видят', true);
+  });
+
+  // --- Объекты: загрузка спрайта ---
+  document.getElementById('uploadObj').addEventListener('click', async () => {
+    const name = document.getElementById('objName').value.trim();
+    const f = document.getElementById('objFile').files[0];
+    if (!name || !f) return setMsg(document.getElementById('objUpMsg'), 'Нужны имя и файл', false);
+    const dataUrl = await fileToDataUrl(f);
+    const r = await api('upload-object', { name, dataUrl });
+    if (r.error) return setMsg(document.getElementById('objUpMsg'), r.error, false);
+    config = r.config;
+    document.getElementById('objName').value = '';
+    renderSpritePills();
+    setMsg(document.getElementById('objUpMsg'), 'Спрайт объекта загружен', true);
+  });
+
+  function renderSpritePills() {
+    const box = document.getElementById('spritePills');
+    box.innerHTML = '';
+    (config.objectSprites || []).forEach(s => {
+      const pill = document.createElement('span');
+      pill.className = 'pill' + (selectedSprite === s.name ? ' sel' : '');
+      pill.innerHTML = `<img src="${s.url}"> ${s.name.replace('.png','')}`;
+      pill.addEventListener('click', () => { selectedSprite = s.name; renderSpritePills(); });
+      box.appendChild(pill);
+    });
+    if (!box.children.length) box.innerHTML = '<span style="opacity:.5;font-size:.85rem">пока нет спрайтов объектов</span>';
+  }
+
+  // --- Карта (top-down мини-карта для расстановки) ---
+  const mapCanvas = document.getElementById('map');
+  const mctx = mapCanvas.getContext('2d');
+  const MAP = 320, SCALE = MAP / WORLD.width;
+  function drawMap() {
+    mctx.fillStyle = '#14241a'; mctx.fillRect(0, 0, MAP, MAP);
+    mctx.strokeStyle = 'rgba(233,69,96,0.5)'; mctx.strokeRect(0, 0, MAP, MAP);
+    mctx.strokeStyle = 'rgba(255,255,255,0.06)';
+    for (let i = 1; i < 10; i++) { const p = i / 10 * MAP; mctx.beginPath(); mctx.moveTo(p,0); mctx.lineTo(p,MAP); mctx.moveTo(0,p); mctx.lineTo(MAP,p); mctx.stroke(); }
+    for (const o of (config.objects || [])) {
+      mctx.fillStyle = '#4ade80';
+      mctx.beginPath(); mctx.arc(o.x * SCALE, o.y * SCALE, 4, 0, Math.PI * 2); mctx.fill();
+    }
+  }
+  mapCanvas.addEventListener('click', async (e) => {
+    if (!selectedSprite) return setMsg(document.getElementById('placeMsg'), 'Сначала выбери спрайт объекта выше', false);
+    const rect = mapCanvas.getBoundingClientRect();
+    const x = Math.round((e.clientX - rect.left) / SCALE);
+    const y = Math.round((e.clientY - rect.top) / SCALE);
+    const scale = parseFloat(document.getElementById('scale').value);
+    const r = await api('add-object', { sprite: selectedSprite, x, y, scale });
+    if (r.error) return setMsg(document.getElementById('placeMsg'), r.error, false);
+    config = r.config;
+    drawMap(); renderObjList();
+    setMsg(document.getElementById('placeMsg'), `Поставлен объект в (${x}, ${y})`, true);
+  });
+  document.getElementById('scale').addEventListener('input', (e) => { document.getElementById('scaleVal').textContent = (+e.target.value).toFixed(1); });
+
+  function renderObjList() {
+    const box = document.getElementById('objList');
+    box.innerHTML = '';
+    (config.objects || []).forEach(o => {
+      const row = document.createElement('div');
+      row.className = 'o';
+      row.innerHTML = `<img src="/sprites/objects/${o.sprite}"> <span>${o.sprite.replace('.png','')} · (${o.x}, ${o.y}) · x${o.scale}</span>`;
+      const del = document.createElement('button');
+      del.className = 'del'; del.textContent = 'Удалить'; del.style.marginLeft = 'auto';
+      del.addEventListener('click', async () => {
+        const r = await api('remove-object', { id: o.id });
+        config = r.config; drawMap(); renderObjList();
+      });
+      row.appendChild(del);
+      box.appendChild(row);
+    });
+  }
+
+  // --- Старт: проверяем права админа ---
+  (async () => {
+    const r = await api('check');
+    if (r.error) { alert('Доступ только для администратора'); location.href = '/characters.html'; return; }
+    config = r.config;
+    document.getElementById('colorA').value = config.ground.colorA;
+    document.getElementById('colorB').value = config.ground.colorB;
+    renderClasses();
+    renderSpritePills();
+    drawMap();
+    renderObjList();
+  })();
+</script>
+</body>
+</html>

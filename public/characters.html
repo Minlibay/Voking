@@ -72,6 +72,7 @@
     <h1>🌍 Выбор персонажа</h1>
     <div>
       <span class="acc" id="acc"></span>
+      <a id="adminLink" href="/admin.html" style="display:none;margin-right:10px;color:#facc15;text-decoration:none;font-size:0.85rem">🛠️ Админка</a>
       <button id="logout">Сменить аккаунт</button>
     </div>
   </div>
@@ -96,6 +97,7 @@
     const token = localStorage.getItem('voking_token');
     if (!token) location.href = '/login.html';
     document.getElementById('acc').textContent = 'Аккаунт: ' + (localStorage.getItem('voking_account') || '');
+    if (localStorage.getItem('voking_admin')) document.getElementById('adminLink').style.display = 'inline';
 
     const charsEl = document.getElementById('chars');
     const emptyEl = document.getElementById('empty');

@@ -71,6 +71,25 @@
     const SPEED = 240;            // мировых единиц в секунду
     let players = [];             // последний снимок мира с сервера
 
+    // --- Конфиг мира из админки (земля, объекты, спрайты) ------------------
+    let worldConfig = { ground: { colorA: '#1f3d2b', colorB: '#24472f' }, objects: [], classSprites: {}, objectSprites: [] };
+    const imgCache = new Map();   // url -> Image
+    function getImage(url) {
+      if (!url) return null;
+      if (imgCache.has(url)) return imgCache.get(url);
+      const img = new Image();
+      img.src = url;
+      imgCache.set(url, img);
+      return img;
+    }
+    function applyWorldConfig(cfg) {
+      if (!cfg) return;
+      worldConfig = cfg;
+      // заранее подгружаем все спрайты
+      Object.values(cfg.classSprites || {}).forEach(getImage);
+      (cfg.objects || []).forEach(o => getImage('/sprites/objects/' + o.sprite));
+    }
+
     const keys = {};
 
     function resize() {
@@ -101,12 +120,16 @@
           // сервер прислал сохранённую позицию персонажа
           me.x = msg.x;
           me.y = msg.y;
+          applyWorldConfig(msg.config);
           startGame();
         } else if (msg.type === 'state') {
           players = msg.players;
           document.getElementById('count').textContent = players.length;
           const mine = players.find(p => p.id === myId);
           if (mine) document.getElementById('whoami').textContent = mine.name;
+        } else if (msg.type === 'world') {
+          // админ что-то изменил — обновляем мир «вживую»
+          applyWorldConfig(msg.config);
         } else if (msg.type === 'chat') {
           addMessage(msg.from, msg.text);
         }
@@ -252,7 +275,7 @@
           ctx.lineTo(bottom.x, bottom.y);
           ctx.lineTo(left.x, left.y);
           ctx.closePath();
-          ctx.fillStyle = (i + j) % 2 === 0 ? '#1f3d2b' : '#24472f';   // трава, шахматка
+          ctx.fillStyle = (i + j) % 2 === 0 ? worldConfig.ground.colorA : worldConfig.ground.colorB;
           ctx.fill();
           ctx.strokeStyle = 'rgba(0,0,0,0.15)';
           ctx.lineWidth = 1;
@@ -271,14 +294,28 @@
       ctx.closePath();
       ctx.stroke();
 
-      // --- Персонажи: сортировка по глубине (дальние рисуем первыми) -------
-      const drawList = players.map(p => {
+      // --- Объекты и персонажи в одном списке, сортировка по глубине -------
+      const drawList = [];
+      for (const o of (worldConfig.objects || [])) {
+        drawList.push({ kind: 'object', o, wx: o.x, wy: o.y, depth: o.x + o.y });
+      }
+      for (const p of players) {
         const wx = p.id === myId ? me.x : p.x;
         const wy = p.id === myId ? me.y : p.y;
-        return { p, wx, wy, depth: wx + wy };
-      }).sort((a, b) => a.depth - b.depth);
+        drawList.push({ kind: 'player', p, wx, wy, depth: wx + wy });
+      }
+      drawList.sort((a, b) => a.depth - b.depth);   // дальние (меньше x+y) — первыми
 
-      for (const { p, wx, wy } of drawList) {
+      for (const item of drawList) {
+        const x = sx(item.wx, item.wy);
+        const y = sy(item.wx, item.wy);
+
+        if (item.kind === 'object') {
+          drawObject(x, y, item.o);
+          continue;
+        }
+
+        const p = item.p, wx = item.wx, wy = item.wy;
         // обновляем состояние анимации персонажа
         let a = anim.get(p.id);
         if (!a) { a = { phase: 0, lastX: wx, lastY: wy, lastMove: 0, facing: 1 }; anim.set(p.id, a); }
@@ -293,9 +330,12 @@
         const moving = (now - a.lastMove) < 150;        // «идёт» ещё 150мс после последнего сдвига
         a.phase += fdt * (moving ? 9 : 2.2);            // скорость шага / дыхания
 
-        const x = sx(wx, wy);
-        const y = sy(wx, wy);
-        drawCharacter(x, y, p.color, p.name, p.id === myId, a, moving, now);
+        const sprite = getImage(worldConfig.classSprites && worldConfig.classSprites[p.klass]);
+        if (sprite && sprite.complete && sprite.naturalWidth > 0) {
+          drawSpriteCharacter(x, y, sprite, p.name, p.id === myId, a, moving, now);
+        } else {
+          drawCharacter(x, y, p.color, p.name, p.id === myId, a, moving, now);
+        }
       }
 
       // подчищаем состояние ушедших игроков
@@ -387,6 +427,51 @@
       ctx.strokeText(name, x, headY - R * 0.95);
       ctx.fillStyle = '#fff';
       ctx.fillText(name, x, headY - R * 0.95);
+    }
+
+    // Рисует персонажа загруженным спрайтом (билборд) с покачиванием при ходьбе
+    function drawSpriteCharacter(x, y, img, name, isMe, a, moving, now) {
+      const H = radius * 4.2;                          // высота спрайта на экране
+      const W = H * (img.naturalWidth / img.naturalHeight);
+      const bob = moving ? Math.abs(Math.sin(a.phase)) * radius * 0.22
+                         : Math.sin(now / 600) * radius * 0.06;
+      const lean = moving ? Math.sin(a.phase) * 0.05 : 0;   // лёгкий наклон при шаге
+
+      // тень
+      ctx.beginPath();
+      ctx.ellipse(x, y, radius * 1.05, radius * 0.5, 0, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0,0,0,0.33)';
+      ctx.fill();
+
+      ctx.save();
+      ctx.translate(x, y - bob);
+      ctx.rotate(lean);
+      ctx.scale(a.facing, 1);                          // разворот по направлению
+      if (isMe) { ctx.shadowColor = 'rgba(255,255,255,0.8)'; ctx.shadowBlur = 8; }
+      ctx.drawImage(img, -W / 2, -H, W, H);            // ноги в точке (x,y)
+      ctx.restore();
+
+      ctx.font = '13px Segoe UI, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+      ctx.strokeText(name, x, y - H - 4);
+      ctx.fillStyle = '#fff';
+      ctx.fillText(name, x, y - H - 4);
+    }
+
+    // Рисует объект мира (дерево/камень) спрайтом, основанием в точке (x,y)
+    function drawObject(x, y, o) {
+      const img = getImage('/sprites/objects/' + o.sprite);
+      if (!img || !img.complete || !img.naturalWidth) return;
+      const H = 120 * (o.scale || 1);
+      const W = H * (img.naturalWidth / img.naturalHeight);
+      // мягкая тень у основания
+      ctx.beginPath();
+      ctx.ellipse(x, y, W * 0.28, H * 0.06, 0, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0,0,0,0.25)';
+      ctx.fill();
+      ctx.drawImage(img, x - W / 2, y - H, W, H);
     }
 
     function startGame() {

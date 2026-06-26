@@ -9,6 +9,7 @@ const path = require('path');
 const { WebSocketServer } = require('ws');
 const auth = require('./auth');
 const characters = require('./characters');
+const world = require('./world');
 
 const PORT = process.env.PORT || 3000;
 
@@ -30,13 +31,14 @@ const MIME = {
   '.ico': 'image/x-icon',
 };
 
-// Читает тело запроса и парсит JSON (с ограничением размера)
-function readJsonBody(req) {
+// Читает тело запроса и парсит JSON (с ограничением размера).
+// Для загрузки картинок в админке лимит выше.
+function readJsonBody(req, maxBytes = 1e5) {
   return new Promise((resolve) => {
     let body = '';
     req.on('data', (chunk) => {
       body += chunk;
-      if (body.length > 1e5) req.destroy();   // защита от слишком больших тел
+      if (body.length > maxBytes) req.destroy();
     });
     req.on('end', () => {
       try { resolve(JSON.parse(body || '{}')); } catch { resolve(null); }
@@ -55,8 +57,10 @@ const server = http.createServer(async (req, res) => {
   // --- API аутентификации --------------------------------------------------
   if (urlPath.startsWith('/api/')) {
     if (req.method !== 'POST') return sendJson(res, 405, { error: 'Только POST' });
-    const body = await readJsonBody(req);
-    if (!body) return sendJson(res, 400, { error: 'Некорректный запрос' });
+    // загрузка спрайтов в админке может быть крупной — поднимаем лимит
+    const maxBytes = urlPath.startsWith('/api/admin/upload') ? 9e6 : 1e5;
+    const body = await readJsonBody(req, maxBytes);
+    if (!body) return sendJson(res, 400, { error: 'Некорректный запрос (возможно, файл слишком большой)' });
 
     if (urlPath === '/api/register') {
       const result = auth.register(body.username, body.password);
@@ -83,6 +87,29 @@ const server = http.createServer(async (req, res) => {
         const result = characters.remove(body.id, account);
         return sendJson(res, result.error ? 400 : 200, result);
       }
+    }
+
+    // --- Админка (только для аккаунтов-админов) ---------------------------
+    if (urlPath.startsWith('/api/admin/')) {
+      const admin = auth.verifyAdmin(body.token);
+      if (!admin) return sendJson(res, 403, { error: 'Доступ только для администратора' });
+
+      if (urlPath === '/api/admin/check') {
+        return sendJson(res, 200, { isAdmin: true, config: world.publicConfig() });
+      }
+      let result;
+      if (urlPath === '/api/admin/upload-sprite') result = world.uploadClassSprite(body.klass, body.dataUrl);
+      else if (urlPath === '/api/admin/upload-object') result = world.uploadObjectSprite(body.name, body.dataUrl);
+      else if (urlPath === '/api/admin/set-ground') result = world.setGround(body.colorA, body.colorB);
+      else if (urlPath === '/api/admin/add-object') result = world.addObject(body.sprite, body.x, body.y, body.scale);
+      else if (urlPath === '/api/admin/remove-object') result = world.removeObject(body.id);
+      else return sendJson(res, 404, { error: 'Неизвестный метод админки' });
+
+      if (result && !result.error) {
+        // мгновенно рассылаем новый мир всем игрокам в онлайне
+        broadcast({ type: 'world', config: world.publicConfig() });
+      }
+      return sendJson(res, result && result.error ? 400 : 200, { ...result, config: world.publicConfig() });
     }
 
     return sendJson(res, 404, { error: 'Неизвестный метод API' });
@@ -156,6 +183,7 @@ wss.on('connection', (ws) => {
           id,
           charId: character.id,
           name: character.name,
+          klass: character.klass,
           x: character.x == null ? WORLD.width / 2 : character.x,
           y: character.y == null ? WORLD.height / 2 : character.y,
           color: cls.color,
@@ -164,7 +192,7 @@ wss.on('connection', (ws) => {
         };
         players.set(id, player);
 
-        send(ws, { type: 'welcome', id, world: WORLD, radius: PLAYER_RADIUS, x: player.x, y: player.y });
+        send(ws, { type: 'welcome', id, world: WORLD, radius: PLAYER_RADIUS, x: player.x, y: player.y, config: world.publicConfig() });
         broadcast({ type: 'chat', from: 'СИСТЕМА', text: `${player.name} зашёл в мир` });
         break;
       }
@@ -203,7 +231,7 @@ wss.on('connection', (ws) => {
 setInterval(() => {
   const snapshot = [];
   for (const p of players.values()) {
-    snapshot.push({ id: p.id, name: p.name, x: Math.round(p.x), y: Math.round(p.y), color: p.color, dir: p.dir });
+    snapshot.push({ id: p.id, name: p.name, klass: p.klass, x: Math.round(p.x), y: Math.round(p.y), color: p.color, dir: p.dir });
   }
   broadcast({ type: 'state', players: snapshot });
 }, 1000 / TICK_RATE);
