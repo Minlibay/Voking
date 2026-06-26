@@ -48,7 +48,20 @@
     #survival .lbl { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 0.72rem; font-weight: 600; text-shadow: 0 1px 2px #000; }
     #hpFill { background: linear-gradient(90deg,#ef4444,#f87171); }
     #hungerFill { background: linear-gradient(90deg,#f59e0b,#fbbf24); }
+    #thirstFill { background: linear-gradient(90deg,#0891b2,#22d3ee); }
     #energyFill { background: linear-gradient(90deg,#3b82f6,#60a5fa); }
+
+    /* --- Баннер погодного ивента --- */
+    #weatherBanner {
+      position: fixed; top: 64px; left: 50%; transform: translateX(-50%); z-index: 15;
+      display: none; text-align: center; padding: 10px 22px; border-radius: 12px;
+      background: rgba(20,40,10,0.85); border: 1px solid #65a30d; color: #d9f99d;
+      font-weight: 600; text-shadow: 0 1px 3px #000; box-shadow: 0 0 24px rgba(132,204,22,0.4);
+      animation: bannerPulse 1.4s ease-in-out infinite;
+    }
+    #weatherBanner .big { font-size: 1.15rem; }
+    #weatherBanner .sub { font-size: 0.82rem; opacity: 0.85; margin-top: 2px; }
+    @keyframes bannerPulse { 0%,100%{ opacity: 0.85 } 50%{ opacity: 1 } }
 
     /* --- Экран смерти --- */
     #death {
@@ -68,8 +81,12 @@
     <span id="whoami" style="color:#facc15;font-weight:600"></span>
     &nbsp;·&nbsp; Онлайн: <b id="count">1</b>
     &nbsp;·&nbsp; <span id="clock" title="Игровое время">🕛 00:00</span>
+    &nbsp;·&nbsp; <span id="weather" title="Погода">☀️ Ясно</span>
+    <span id="sick" title="Вы больны" style="display:none;color:#86efac"> · 🤢 Болезнь</span>
     &nbsp; <button id="logoutBtn" style="font:inherit;pointer-events:auto;cursor:pointer;background:rgba(233,69,96,0.25);color:#fff;border:1px solid rgba(233,69,96,0.5);border-radius:7px;padding:2px 8px;font-size:0.78rem">Выйти</button>
   </div>
+
+  <div id="weatherBanner"></div>
 
   <div class="hint" style="display:none" id="hint">
     Движение: WASD / стрелки<br>Атака: Пробел · Чат: Enter
@@ -83,6 +100,7 @@
   <div id="survival" style="display:none">
     <div class="bar"><div class="fill" id="hpFill"></div><div class="lbl" id="hpLbl">❤️ 100</div></div>
     <div class="bar"><div class="fill" id="hungerFill"></div><div class="lbl" id="hungerLbl">🍖 100</div></div>
+    <div class="bar"><div class="fill" id="thirstFill"></div><div class="lbl" id="thirstLbl">💧 100</div></div>
     <div class="bar"><div class="fill" id="energyFill"></div><div class="lbl" id="energyLbl">⚡ 100</div></div>
   </div>
 
@@ -107,6 +125,10 @@
     let zombies = [];             // зомби из снимка мира
     let swingUntil = 0;           // до какого времени рисовать взмах атаки
     let hurtUntil = 0;            // до какого времени рисовать «получил урон»
+    let weather = { type: 'clear', phase: null, secondsLeft: 0 };
+    let shelters = [];            // безопасные зоны (мировые координаты)
+    let lightningUntil = 0;       // вспышка молнии в грозу
+    const raindrops = [];         // капли дождя (экранные координаты)
 
     // --- Конфиг мира из админки (земля, объекты, спрайты) ------------------
     let worldConfig = { ground: { colorA: '#1f3d2b', colorB: '#24472f' }, objects: [], playerSprite: null, objectSprites: [] };
@@ -158,6 +180,7 @@
           me.x = msg.x;
           me.y = msg.y;
           applyWorldConfig(msg.config);
+          shelters = msg.shelters || [];
           startGame();
         } else if (msg.type === 'state') {
           players = msg.players;
@@ -167,14 +190,18 @@
           if (mine) {
             document.getElementById('whoami').textContent = mine.name;
             updateSurvivalHud(mine);
+            document.getElementById('sick').style.display = mine.sick ? 'inline' : 'none';
           }
           if (msg.time) updateClock(msg.time);
+          if (msg.weather) updateWeather(msg.weather);
         } else if (msg.type === 'death') {
           // сервер возродил персонажа — телепортируемся на спаун и показываем экран
           me.x = msg.x; me.y = msg.y;
           showDeath();
         } else if (msg.type === 'hurt') {
           hurtUntil = performance.now() + 250;   // красная вспышка по краям
+        } else if (msg.type === 'sick') {
+          addMessage('СИСТЕМА', '🤢 Вы простудились! Здоровье будет падать, пока болезнь не пройдёт.');
         } else if (msg.type === 'world') {
           // админ что-то изменил — обновляем мир «вживую»
           applyWorldConfig(msg.config);
@@ -209,7 +236,28 @@
     function updateSurvivalHud(p) {
       setBar('hpFill', 'hpLbl', '❤️', p.health);
       setBar('hungerFill', 'hungerLbl', '🍖', p.hunger);
+      setBar('thirstFill', 'thirstLbl', '💧', p.thirst);
       setBar('energyFill', 'energyLbl', '⚡', p.energy);
+    }
+
+    // --- Погода ------------------------------------------------------------
+    const WEATHER_LABEL = {
+      clear: '☀️ Ясно', heat: '🔥 Жара', rain: '🌧️ Гроза', spores: '☠️ Споры',
+    };
+    function updateWeather(w) {
+      weather = w;
+      document.getElementById('weather').textContent = WEATHER_LABEL[w.type] || '☀️ Ясно';
+
+      const banner = document.getElementById('weatherBanner');
+      if (w.type === 'spores' && w.phase === 'warning') {
+        banner.style.display = 'block';
+        banner.innerHTML = `<div class="big">☠️ ПРИБЛИЖАЮТСЯ ЯДОВИТЫЕ СПОРЫ</div><div class="sub">Бегите в убежище! До волны: ${w.secondsLeft}с</div>`;
+      } else if (w.type === 'spores' && w.phase === 'active') {
+        banner.style.display = 'block';
+        banner.innerHTML = `<div class="big">☠️ ВОЛНА СПОР — ОСТАВАЙТЕСЬ В УБЕЖИЩЕ</div><div class="sub">Вне убежища — смертельный урон! Осталось: ${w.secondsLeft}с</div>`;
+      } else {
+        banner.style.display = 'none';
+      }
     }
     function showDeath() {
       const el = document.getElementById('death');
@@ -386,6 +434,29 @@
       ctx.closePath();
       ctx.stroke();
 
+      // --- Убежища (безопасные зоны) --------------------------------------
+      const sporeAlert = weather.type === 'spores';
+      for (const s of shelters) {
+        const cx = sx(s.x, s.y), cy = sy(s.x, s.y);
+        const rx = s.r * 0.707, ry = s.r * 0.354;   // проекция круга в изометрию
+        ctx.beginPath();
+        ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+        if (sporeAlert) {
+          const pulse = 0.18 + 0.12 * Math.sin(now / 250);
+          ctx.fillStyle = `rgba(74,222,128,${pulse})`;
+          ctx.strokeStyle = 'rgba(134,239,172,0.9)';
+        } else {
+          ctx.fillStyle = 'rgba(34,211,238,0.07)';
+          ctx.strokeStyle = 'rgba(34,211,238,0.4)';
+        }
+        ctx.fill();
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.font = '20px Segoe UI, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('⛺', cx, cy - ry - 2);
+      }
+
       // --- Объекты и персонажи в одном списке, сортировка по глубине -------
       const drawList = [];
       for (const o of (worldConfig.objects || [])) {
@@ -475,6 +546,9 @@
         ctx.fillRect(0, 0, canvas.width, canvas.height);
       }
 
+      // погодные эффекты поверх сцены
+      drawWeatherFx(now, fdt);
+
       // вспышка по краям экрана, когда получаешь урон
       if (now < hurtUntil) {
         const a = (hurtUntil - now) / 250;
@@ -485,6 +559,55 @@
         grd.addColorStop(1, `rgba(180,0,0,${0.5 * a})`);
         ctx.fillStyle = grd;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
+    }
+
+    // Погодные эффекты поверх всей сцены
+    function drawWeatherFx(now, fdt) {
+      const W = canvas.width, H = canvas.height;
+
+      if (weather.type === 'heat') {
+        ctx.fillStyle = 'rgba(255, 140, 30, 0.13)';   // тёплая дымка
+        ctx.fillRect(0, 0, W, H);
+      } else if (weather.type === 'rain') {
+        ctx.fillStyle = 'rgba(30, 45, 80, 0.28)';     // сумрак грозы
+        ctx.fillRect(0, 0, W, H);
+        // капли дождя
+        if (raindrops.length === 0) {
+          for (let i = 0; i < 140; i++) raindrops.push({ x: Math.random() * W, y: Math.random() * H, s: 480 + Math.random() * 360, l: 10 + Math.random() * 12 });
+        }
+        ctx.strokeStyle = 'rgba(170, 200, 255, 0.5)';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        for (const d of raindrops) {
+          d.y += d.s * fdt; d.x -= d.s * 0.25 * fdt;
+          if (d.y > H) { d.y = -d.l; d.x = Math.random() * W; }
+          ctx.moveTo(d.x, d.y); ctx.lineTo(d.x - 3, d.y + d.l);
+        }
+        ctx.stroke();
+        // молнии
+        if (Math.random() < 0.006) lightningUntil = now + 110;
+        if (now < lightningUntil) {
+          ctx.fillStyle = `rgba(255,255,255,${0.45 * ((lightningUntil - now) / 110)})`;
+          ctx.fillRect(0, 0, W, H);
+        }
+      } else {
+        if (raindrops.length) raindrops.length = 0;
+      }
+
+      if (weather.type === 'spores') {
+        const active = weather.phase === 'active';
+        // зелёный туман (во время волны — гуще и пульсирует)
+        const base = active ? 0.34 + 0.06 * Math.sin(now / 300) : 0.16;
+        ctx.fillStyle = `rgba(110, 170, 50, ${base})`;
+        ctx.fillRect(0, 0, W, H);
+        if (active) {
+          const grd = ctx.createRadialGradient(W/2, H/2, Math.min(W,H)*0.25, W/2, H/2, Math.max(W,H)*0.7);
+          grd.addColorStop(0, 'rgba(40,90,10,0)');
+          grd.addColorStop(1, 'rgba(40,90,10,0.55)');
+          ctx.fillStyle = grd;
+          ctx.fillRect(0, 0, W, H);
+        }
       }
     }
 

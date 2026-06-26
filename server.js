@@ -54,12 +54,48 @@ const ZOMBIE = {
   spawnBatch: 2,          // сколько появляется за один спавн-тик
 };
 
+// --- Параметры выживания (продолжение) ------------------------------------
+const THIRST = {
+  decay: 0.35,            // жажда убывает обычно
+  heatMultiplier: 2.6,    // во время жары — быстрее
+  damage: 1.3,            // урон по здоровью при жажде 0
+};
+
+// --- Погода (общая для всех) ----------------------------------------------
+const WEATHER = {
+  changeInterval: [45000, 90000],  // как часто меняется погода (мс)
+  sporeWarning: (Number(process.env.SPORE_WARNING_SEC) || 15) * 1000,   // предупреждение до волны спор
+  sporeDuration: (Number(process.env.SPORE_DURATION_SEC) || 22) * 1000, // длительность волны спор
+  sickChancePerSec: 0.06,          // шанс заболеть в грозу за секунду
+  sickDuration: 25000,             // сколько длится болезнь
+  sickDamage: 0.9,                 // урон по здоровью от болезни
+  sporeDamage: 8,                  // урон вне убежища во время спор
+};
+
+// Безопасные зоны-убежища (мировые координаты, радиус). Центр — стартовая зона.
+const SHELTERS = [
+  { x: 1000, y: 1000, r: 170 },
+  { x: 320, y: 320, r: 140 },
+  { x: 1680, y: 320, r: 140 },
+  { x: 320, y: 1680, r: 140 },
+  { x: 1680, y: 1680, r: 140 },
+];
+function inShelter(p) {
+  return SHELTERS.some(s => Math.hypot(p.x - s.x, p.y - s.y) <= s.r);
+}
+
 // --- Состояние --------------------------------------------------------------
 const players = new Map();        // id -> { id, name, x, y, color, dir, ws }
 const zombies = new Map();        // id -> { id, x, y, health, dir, lastAttack }
 let nextId = 1;
 let nextZombieId = 1;
 let wasNight = false;             // для отслеживания смены дня/ночи
+
+// Текущая погода: type = clear | heat | rain | spores; phase для спор: warning | active
+let weather = { type: 'clear', phase: null };
+// если погода зафиксирована для теста — применяем сразу, иначе первые 30с ясно
+let weatherUntil = Date.now() + (process.env.FORCE_WEATHER ? 0 : 30000);
+const rand = (a, b) => a + Math.random() * (b - a);
 
 // FORCE_NIGHT=1 — всегда ночь (для тестов и отладки орды)
 const FORCE_NIGHT = process.env.FORCE_NIGHT === '1';
@@ -233,12 +269,14 @@ wss.on('connection', (ws) => {
           health: character.health == null ? 100 : character.health,
           hunger: character.hunger == null ? 100 : character.hunger,
           energy: character.energy == null ? 100 : character.energy,
+          thirst: character.thirst == null ? 100 : character.thirst,
+          sick: false, sickUntil: 0,
           lastMoveTime: 0,
           ws,
         };
         players.set(id, player);
 
-        send(ws, { type: 'welcome', id, world: WORLD, radius: PLAYER_RADIUS, x: player.x, y: player.y, config: world.publicConfig() });
+        send(ws, { type: 'welcome', id, world: WORLD, radius: PLAYER_RADIUS, x: player.x, y: player.y, config: world.publicConfig(), shelters: SHELTERS });
         broadcast({ type: 'chat', from: 'СИСТЕМА', text: `${player.name} зашёл в мир` });
         break;
       }
@@ -295,7 +333,8 @@ wss.on('connection', (ws) => {
 function snapshotState(p) {
   return {
     x: Math.round(p.x), y: Math.round(p.y),
-    health: Math.round(p.health), hunger: Math.round(p.hunger), energy: Math.round(p.energy),
+    health: Math.round(p.health), hunger: Math.round(p.hunger),
+    energy: Math.round(p.energy), thirst: Math.round(p.thirst),
   };
 }
 
@@ -306,14 +345,16 @@ setInterval(() => {
     snapshot.push({
       id: p.id, name: p.name,
       x: Math.round(p.x), y: Math.round(p.y), color: p.color, dir: p.dir,
-      health: Math.round(p.health), hunger: Math.round(p.hunger), energy: Math.round(p.energy),
+      health: Math.round(p.health), hunger: Math.round(p.hunger),
+      energy: Math.round(p.energy), thirst: Math.round(p.thirst), sick: p.sick,
     });
   }
   const zoms = [];
   for (const z of zombies.values()) {
     zoms.push({ id: z.id, x: Math.round(z.x), y: Math.round(z.y), dir: z.dir, health: Math.round(z.health) });
   }
-  broadcast({ type: 'state', players: snapshot, zombies: zoms, time: worldTime() });
+  const weatherOut = { type: weather.type, phase: weather.phase, secondsLeft: Math.max(0, Math.ceil((weatherUntil - Date.now()) / 1000)) };
+  broadcast({ type: 'state', players: snapshot, zombies: zoms, time: worldTime(), weather: weatherOut });
 }, 1000 / TICK_RATE);
 
 // Возрождает игрока, если его здоровье на нуле. Возвращает true, если возродил.
@@ -335,20 +376,80 @@ setInterval(() => {
   for (const p of players.values()) {
     const moving = now - p.lastMoveTime < 1200;
 
-    // голод и энергия убывают (энергия быстрее в движении)
+    // голод, энергия, жажда убывают (жажда быстрее в жару)
     p.hunger = Math.max(0, p.hunger - SURVIVAL.hungerDecay * SPEED_MULT);
     p.energy = Math.max(0, p.energy - (SURVIVAL.energyDecay + (moving ? SURVIVAL.moveEnergyExtra : 0)) * SPEED_MULT);
+    const thirstRate = THIRST.decay * (weather.type === 'heat' ? THIRST.heatMultiplier : 1);
+    p.thirst = Math.max(0, p.thirst - thirstRate * SPEED_MULT);
 
-    // здоровье: урон от голода/усталости, иначе регенерация при сытости и бодрости
+    // здоровье: урон от голода/жажды/усталости, иначе регенерация
     let dh = 0;
     if (p.hunger <= 0) dh -= SURVIVAL.starveDamage;
     if (p.energy <= 0) dh -= SURVIVAL.exhaustDamage;
-    if (dh === 0 && p.hunger > SURVIVAL.regenThreshold && p.energy > SURVIVAL.regenThreshold) {
+    if (p.thirst <= 0) dh -= THIRST.damage;
+    if (dh === 0 && p.hunger > SURVIVAL.regenThreshold && p.energy > SURVIVAL.regenThreshold && p.thirst > SURVIVAL.regenThreshold) {
       dh += SURVIVAL.regen;
     }
+
+    // погода: болезнь в грозу и урон от спор вне убежища
+    if (weather.type === 'rain' && !p.sick && Math.random() < WEATHER.sickChancePerSec) {
+      p.sick = true; p.sickUntil = now + WEATHER.sickDuration;
+      send(p.ws, { type: 'sick' });
+    }
+    if (p.sick) {
+      dh -= WEATHER.sickDamage;
+      if (now >= p.sickUntil) p.sick = false;
+    }
+    if (weather.type === 'spores' && weather.phase === 'active' && !inShelter(p)) {
+      dh -= WEATHER.sporeDamage;
+    }
+
     p.health = Math.max(0, Math.min(100, p.health + dh * SPEED_MULT));
 
     respawnIfDead(p, 'не выжил и возродился');
+  }
+}, 1000);
+
+// --- Планировщик погоды ----------------------------------------------------
+// FORCE_WEATHER=heat|rain|spores — зафиксировать погоду для теста/отладки.
+const FORCE_WEATHER = process.env.FORCE_WEATHER || null;
+
+function pickWeather() {
+  if (FORCE_WEATHER) return FORCE_WEATHER;
+  let next, tries = 0;
+  do {
+    const r = Math.random();
+    next = r < 0.5 ? 'clear' : r < 0.72 ? 'heat' : r < 0.9 ? 'rain' : 'spores';
+  } while (next === weather.type && next !== 'spores' && ++tries < 4);
+  return next;
+}
+
+const WEATHER_MSG = {
+  clear: '☀️ Погода прояснилась.',
+  heat: '🔥 Наступила жара — пейте больше, иначе обезвоживание!',
+  rain: '🌧️ Началась гроза — можно простудиться.',
+};
+
+setInterval(() => {
+  const now = Date.now();
+  if (now < weatherUntil) return;
+
+  if (weather.type === 'spores' && weather.phase === 'warning') {
+    weather = { type: 'spores', phase: 'active' };
+    weatherUntil = now + WEATHER.sporeDuration;
+    broadcast({ type: 'chat', from: 'СИСТЕМА', text: '☠️ ВОЛНА ЯДОВИТЫХ СПОР! Вне убежища — смерть!' });
+    return;
+  }
+
+  const next = pickWeather();
+  if (next === 'spores') {
+    weather = { type: 'spores', phase: 'warning' };
+    weatherUntil = now + WEATHER.sporeWarning;
+    broadcast({ type: 'chat', from: 'СИСТЕМА', text: '☠️ Приближаются ядовитые споры! Срочно найдите убежище!' });
+  } else {
+    weather = { type: next, phase: null };
+    weatherUntil = now + rand(WEATHER.changeInterval[0], WEATHER.changeInterval[1]);
+    broadcast({ type: 'chat', from: 'СИСТЕМА', text: WEATHER_MSG[next] });
   }
 }, 1000);
 
@@ -365,8 +466,8 @@ setInterval(() => {
   }
   wasNight = night;
 
-  // спавн зомби ночью рядом со случайными игроками
-  if (night && players.size > 0) {
+  // спавн зомби ночью рядом со случайными игроками (DISABLE_ZOMBIES=1 — выкл для тестов)
+  if (night && players.size > 0 && !process.env.DISABLE_ZOMBIES) {
     const cap = players.size * ZOMBIE.maxPerPlayer;
     const targets = [...players.values()];
     for (let n = 0; n < ZOMBIE.spawnBatch && zombies.size < cap; n++) {
