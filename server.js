@@ -92,7 +92,7 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, { characters: characters.listByOwner(account) });
       }
       if (urlPath === '/api/characters/create') {
-        const result = characters.create(account, body.name, body.klass);
+        const result = characters.create(account, body.name);
         return sendJson(res, result.error ? 400 : 200, result);
       }
       if (urlPath === '/api/characters/delete') {
@@ -110,7 +110,7 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, { isAdmin: true, config: world.publicConfig() });
       }
       let result;
-      if (urlPath === '/api/admin/upload-sprite') result = world.uploadClassSprite(body.klass, body.dataUrl);
+      if (urlPath === '/api/admin/upload-sprite') result = world.uploadPlayerSprite(body.dataUrl);
       else if (urlPath === '/api/admin/upload-object') result = world.uploadObjectSprite(body.name, body.dataUrl);
       else if (urlPath === '/api/admin/set-ground') result = world.setGround(body.colorA, body.colorB);
       else if (urlPath === '/api/admin/add-object') result = world.addObject(body.sprite, body.x, body.y, body.scale);
@@ -190,15 +190,13 @@ wss.on('connection', (ws) => {
           break;
         }
         // 3) грузим сохранённую позицию (или ставим в центр мира при первом входе)
-        const cls = characters.CLASSES[character.klass];
         player = {
           id,
           charId: character.id,
           name: character.name,
-          klass: character.klass,
           x: character.x == null ? SPAWN.x : character.x,
           y: character.y == null ? SPAWN.y : character.y,
-          color: cls.color,
+          color: character.color || '#e94560',
           dir: 0,
           // статы выживания (по умолчанию полные при первом входе)
           health: character.health == null ? 100 : character.health,
@@ -260,7 +258,7 @@ setInterval(() => {
   const snapshot = [];
   for (const p of players.values()) {
     snapshot.push({
-      id: p.id, name: p.name, klass: p.klass,
+      id: p.id, name: p.name,
       x: Math.round(p.x), y: Math.round(p.y), color: p.color, dir: p.dir,
       health: Math.round(p.health), hunger: Math.round(p.hunger), energy: Math.round(p.energy),
     });

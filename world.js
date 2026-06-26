@@ -15,8 +15,6 @@ const FILE = path.join(DATA_DIR, 'world.json');
 const SPRITES_DIR = path.join(__dirname, 'public', 'sprites');
 const OBJ_SPRITES_DIR = path.join(SPRITES_DIR, 'objects');
 
-const CLASS_KEYS = ['warrior', 'mage', 'rogue', 'priest', 'hunter', 'warlock'];
-
 let config = {
   ground: { colorA: '#1f3d2b', colorB: '#24472f' },
   objects: [],   // { id, sprite, x, y, scale }
@@ -41,14 +39,10 @@ function save() {
   fs.writeFileSync(FILE, JSON.stringify(config, null, 2));
 }
 
-// Карта класс -> URL спрайта (или null, если не загружен). ?v= для сброса кэша.
-function classSprites() {
-  const out = {};
-  for (const k of CLASS_KEYS) {
-    const p = path.join(SPRITES_DIR, k + '.png');
-    out[k] = fs.existsSync(p) ? `/sprites/${k}.png?v=${Math.floor(fs.statSync(p).mtimeMs)}` : null;
-  }
-  return out;
+// Единый спрайт игрока (выжившего) — URL или null. ?v= для сброса кэша.
+function playerSprite() {
+  const p = path.join(SPRITES_DIR, 'player.png');
+  return fs.existsSync(p) ? `/sprites/player.png?v=${Math.floor(fs.statSync(p).mtimeMs)}` : null;
 }
 
 // Список загруженных спрайтов объектов
@@ -64,7 +58,7 @@ function publicConfig() {
   return {
     ground: config.ground,
     objects: config.objects,
-    classSprites: classSprites(),
+    playerSprite: playerSprite(),
     objectSprites: objectSprites(),
   };
 }
@@ -80,9 +74,8 @@ function saveDataUrl(filePath, dataUrl) {
   return null;
 }
 
-function uploadClassSprite(klass, dataUrl) {
-  if (!CLASS_KEYS.includes(klass)) return { error: 'Неизвестный класс' };
-  const err = saveDataUrl(path.join(SPRITES_DIR, klass + '.png'), dataUrl);
+function uploadPlayerSprite(dataUrl) {
+  const err = saveDataUrl(path.join(SPRITES_DIR, 'player.png'), dataUrl);
   return err ? { error: err } : { ok: true };
 }
 
@@ -125,6 +118,6 @@ function removeObject(id) {
 load();
 
 module.exports = {
-  CLASS_KEYS, publicConfig,
-  uploadClassSprite, uploadObjectSprite, setGround, addObject, removeObject,
+  publicConfig,
+  uploadPlayerSprite, uploadObjectSprite, setGround, addObject, removeObject,
 };

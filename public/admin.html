@@ -53,11 +53,15 @@
     <a href="/characters.html">← К персонажам</a>
   </div>
 
-  <!-- Спрайты героев -->
+  <!-- Спрайт игрока -->
   <div class="card">
-    <h2>🦸 Спрайты героев</h2>
-    <p class="hint">Загрузи картинку класса (лучше PNG с прозрачным фоном, персонаж в полный рост). Заменяет рисованную фигурку у всех игроков этого класса.</p>
-    <div class="grid" id="classGrid"></div>
+    <h2>🧍 Спрайт выжившего</h2>
+    <p class="hint">Один общий спрайт для всех игроков (лучше PNG с прозрачным фоном, персонаж в полный рост). Заменяет рисованную фигурку.</p>
+    <div class="slot" id="playerSlot" style="max-width:200px">
+      <div class="thumb" id="playerThumb"><span style="font-size:2rem">🧍</span></div>
+      <input type="file" id="playerFile" accept="image/*">
+      <button class="sec" id="uploadPlayer" style="margin-top:8px;width:100%">Загрузить</button>
+    </div>
     <div class="msg" id="spriteMsg"></div>
   </div>
 
@@ -104,11 +108,6 @@
   const token = localStorage.getItem('voking_token');
   if (!token) location.href = '/login.html';
 
-  const CLASSES = {
-    warrior: { name: 'Воин', icon: '⚔️' }, mage: { name: 'Маг', icon: '🔮' },
-    rogue: { name: 'Разбойник', icon: '🗡️' }, priest: { name: 'Жрец', icon: '✨' },
-    hunter: { name: 'Охотник', icon: '🏹' }, warlock: { name: 'Чернокнижник', icon: '💀' },
-  };
   const WORLD = { width: 2000, height: 2000 };
   let config = null;
   let selectedSprite = null;
@@ -127,32 +126,21 @@
   }
   function setMsg(el, text, ok) { el.textContent = text; el.className = 'msg ' + (ok ? 'ok' : 'error'); }
 
-  // --- Спрайты героев ---
-  function renderClasses() {
-    const grid = document.getElementById('classGrid');
-    grid.innerHTML = '';
-    for (const [key, c] of Object.entries(CLASSES)) {
-      const url = config.classSprites[key];
-      const slot = document.createElement('div');
-      slot.className = 'slot';
-      slot.innerHTML = `
-        <div class="thumb">${url ? `<img src="${url}">` : `<span style="font-size:2rem">${c.icon}</span>`}</div>
-        <div class="nm">${c.icon} ${c.name}</div>
-        <input type="file" accept="image/*">
-        <button class="sec" style="margin-top:8px;width:100%">Загрузить</button>`;
-      const file = slot.querySelector('input');
-      slot.querySelector('button').addEventListener('click', async () => {
-        if (!file.files[0]) return setMsg(document.getElementById('spriteMsg'), 'Выбери файл для ' + c.name, false);
-        const dataUrl = await fileToDataUrl(file.files[0]);
-        const r = await api('upload-sprite', { klass: key, dataUrl });
-        if (r.error) return setMsg(document.getElementById('spriteMsg'), r.error, false);
-        config = r.config;
-        renderClasses();
-        setMsg(document.getElementById('spriteMsg'), `Спрайт «${c.name}» обновлён`, true);
-      });
-      grid.appendChild(slot);
-    }
+  // --- Спрайт выжившего ---
+  function renderPlayerSprite() {
+    const thumb = document.getElementById('playerThumb');
+    thumb.innerHTML = config.playerSprite ? `<img src="${config.playerSprite}">` : '<span style="font-size:2rem">🧍</span>';
   }
+  document.getElementById('uploadPlayer').addEventListener('click', async () => {
+    const file = document.getElementById('playerFile');
+    if (!file.files[0]) return setMsg(document.getElementById('spriteMsg'), 'Выбери файл', false);
+    const dataUrl = await fileToDataUrl(file.files[0]);
+    const r = await api('upload-sprite', { dataUrl });
+    if (r.error) return setMsg(document.getElementById('spriteMsg'), r.error, false);
+    config = r.config;
+    renderPlayerSprite();
+    setMsg(document.getElementById('spriteMsg'), 'Спрайт выжившего обновлён', true);
+  });
 
   // --- Земля ---
   document.getElementById('saveGround').addEventListener('click', async () => {
@@ -242,7 +230,7 @@
     config = r.config;
     document.getElementById('colorA').value = config.ground.colorA;
     document.getElementById('colorB').value = config.ground.colorB;
-    renderClasses();
+    renderPlayerSprite();
     renderSpritePills();
     drawMap();
     renderObjList();

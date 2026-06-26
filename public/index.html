@@ -105,7 +105,7 @@
     let players = [];             // последний снимок мира с сервера
 
     // --- Конфиг мира из админки (земля, объекты, спрайты) ------------------
-    let worldConfig = { ground: { colorA: '#1f3d2b', colorB: '#24472f' }, objects: [], classSprites: {}, objectSprites: [] };
+    let worldConfig = { ground: { colorA: '#1f3d2b', colorB: '#24472f' }, objects: [], playerSprite: null, objectSprites: [] };
     const imgCache = new Map();   // url -> Image
     function getImage(url) {
       if (!url) return null;
@@ -118,8 +118,8 @@
     function applyWorldConfig(cfg) {
       if (!cfg) return;
       worldConfig = cfg;
-      // заранее подгружаем все спрайты
-      Object.values(cfg.classSprites || {}).forEach(getImage);
+      // заранее подгружаем спрайты
+      if (cfg.playerSprite) getImage(cfg.playerSprite);
       (cfg.objects || []).forEach(o => getImage('/sprites/objects/' + o.sprite));
     }
 
@@ -390,7 +390,7 @@
         const moving = (now - a.lastMove) < 150;        // «идёт» ещё 150мс после последнего сдвига
         a.phase += fdt * (moving ? 9 : 2.2);            // скорость шага / дыхания
 
-        const sprite = getImage(worldConfig.classSprites && worldConfig.classSprites[p.klass]);
+        const sprite = getImage(worldConfig.playerSprite);
         if (sprite && sprite.complete && sprite.naturalWidth > 0) {
           drawSpriteCharacter(x, y, sprite, p.name, p.id === myId, a, moving, now, p.health);
         } else {
