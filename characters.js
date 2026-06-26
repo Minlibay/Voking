@@ -66,6 +66,8 @@ function create(owner, name, klass) {
     owner, name, klass,
     level: 1,
     x: null, y: null,              // позиция назначится при первом входе в мир
+    // статы выживания (null = ещё не инициализированы, выставятся при входе)
+    health: null, hunger: null, energy: null,
     createdAt: Date.now(),
   };
   chars.set(c.id, c);
@@ -87,13 +89,18 @@ function remove(id, owner) {
   return { ok: true };
 }
 
-function savePosition(id, x, y) {
+// Сохраняет позицию и статы выживания персонажа
+function saveState(id, state) {
   const c = chars.get(id);
   if (!c) return;
-  c.x = x; c.y = y;
+  if (state.x != null) c.x = state.x;
+  if (state.y != null) c.y = state.y;
+  if (state.health != null) c.health = state.health;
+  if (state.hunger != null) c.hunger = state.hunger;
+  if (state.energy != null) c.energy = state.energy;
   save();
 }
 
 load();
 
-module.exports = { CLASSES, listByOwner, create, getOwned, remove, savePosition, publicView };
+module.exports = { CLASSES, listByOwner, create, getOwned, remove, saveState, publicView };

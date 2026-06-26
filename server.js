@@ -17,6 +17,18 @@ const PORT = process.env.PORT || 3000;
 const WORLD = { width: 2000, height: 2000 };
 const TICK_RATE = 20;            // сколько раз в секунду рассылаем состояние мира
 const PLAYER_RADIUS = 18;
+const SPAWN = { x: WORLD.width / 2, y: WORLD.height / 2 };
+
+// --- Параметры выживания (на 1 секунду) -----------------------------------
+const SURVIVAL = {
+  hungerDecay: 0.4,       // голод убывает
+  energyDecay: 0.3,       // энергия убывает
+  moveEnergyExtra: 0.5,   // дополнительно при движении
+  starveDamage: 1.5,      // урон по здоровью при голоде 0
+  exhaustDamage: 0.8,     // урон по здоровью при энергии 0
+  regen: 0.6,             // регенерация здоровья, когда сыт и бодр
+  regenThreshold: 40,     // порог сытости/бодрости для регена
+};
 
 // --- Состояние --------------------------------------------------------------
 const players = new Map();        // id -> { id, name, x, y, color, dir, ws }
@@ -184,10 +196,15 @@ wss.on('connection', (ws) => {
           charId: character.id,
           name: character.name,
           klass: character.klass,
-          x: character.x == null ? WORLD.width / 2 : character.x,
-          y: character.y == null ? WORLD.height / 2 : character.y,
+          x: character.x == null ? SPAWN.x : character.x,
+          y: character.y == null ? SPAWN.y : character.y,
           color: cls.color,
           dir: 0,
+          // статы выживания (по умолчанию полные при первом входе)
+          health: character.health == null ? 100 : character.health,
+          hunger: character.hunger == null ? 100 : character.hunger,
+          energy: character.energy == null ? 100 : character.energy,
+          lastMoveTime: 0,
           ws,
         };
         players.set(id, player);
@@ -200,8 +217,11 @@ wss.on('connection', (ws) => {
       case 'move': {
         if (!player) break;
         // клиент присылает свою позицию; сервер ограничивает её границами мира
-        player.x = clamp(Number(msg.x) || 0, 0, WORLD.width);
-        player.y = clamp(Number(msg.y) || 0, 0, WORLD.height);
+        const nx = clamp(Number(msg.x) || 0, 0, WORLD.width);
+        const ny = clamp(Number(msg.y) || 0, 0, WORLD.height);
+        if (Math.hypot(nx - player.x, ny - player.y) > 0.5) player.lastMoveTime = Date.now();
+        player.x = nx;
+        player.y = ny;
         player.dir = Number(msg.dir) || 0;
         break;
       }
@@ -217,8 +237,8 @@ wss.on('connection', (ws) => {
 
   ws.on('close', () => {
     if (player) {
-      // сохраняем позицию персонажа, чтобы при следующем входе он был там же
-      characters.savePosition(player.charId, Math.round(player.x), Math.round(player.y));
+      // сохраняем позицию и статы, чтобы при следующем входе всё продолжилось
+      characters.saveState(player.charId, snapshotState(player));
       players.delete(id);
       broadcast({ type: 'chat', from: 'СИСТЕМА', text: `${player.name} вышел` });
     }
@@ -227,19 +247,63 @@ wss.on('connection', (ws) => {
   ws.on('error', () => {});
 });
 
+// Состояние персонажа для сохранения
+function snapshotState(p) {
+  return {
+    x: Math.round(p.x), y: Math.round(p.y),
+    health: Math.round(p.health), hunger: Math.round(p.hunger), energy: Math.round(p.energy),
+  };
+}
+
 // --- Игровой цикл: рассылаем снимок мира всем игрокам -----------------------
 setInterval(() => {
   const snapshot = [];
   for (const p of players.values()) {
-    snapshot.push({ id: p.id, name: p.name, klass: p.klass, x: Math.round(p.x), y: Math.round(p.y), color: p.color, dir: p.dir });
+    snapshot.push({
+      id: p.id, name: p.name, klass: p.klass,
+      x: Math.round(p.x), y: Math.round(p.y), color: p.color, dir: p.dir,
+      health: Math.round(p.health), hunger: Math.round(p.hunger), energy: Math.round(p.energy),
+    });
   }
   broadcast({ type: 'state', players: snapshot });
 }, 1000 / TICK_RATE);
 
-// Раз в 15 секунд сохраняем позиции активных персонажей
+// Множитель скорости выживания (для тестов/балансировки): SURVIVAL_SPEED=60 ускоряет
+const SPEED_MULT = Number(process.env.SURVIVAL_SPEED) || 1;
+
+// --- Тик выживания: раз в секунду меняем статы, обрабатываем смерть ---------
+setInterval(() => {
+  const now = Date.now();
+  for (const p of players.values()) {
+    const moving = now - p.lastMoveTime < 1200;
+
+    // голод и энергия убывают (энергия быстрее в движении)
+    p.hunger = Math.max(0, p.hunger - SURVIVAL.hungerDecay * SPEED_MULT);
+    p.energy = Math.max(0, p.energy - (SURVIVAL.energyDecay + (moving ? SURVIVAL.moveEnergyExtra : 0)) * SPEED_MULT);
+
+    // здоровье: урон от голода/усталости, иначе регенерация при сытости и бодрости
+    let dh = 0;
+    if (p.hunger <= 0) dh -= SURVIVAL.starveDamage;
+    if (p.energy <= 0) dh -= SURVIVAL.exhaustDamage;
+    if (dh === 0 && p.hunger > SURVIVAL.regenThreshold && p.energy > SURVIVAL.regenThreshold) {
+      dh += SURVIVAL.regen;
+    }
+    p.health = Math.max(0, Math.min(100, p.health + dh * SPEED_MULT));
+
+    // смерть и возрождение
+    if (p.health <= 0) {
+      p.health = 100; p.hunger = 70; p.energy = 70;
+      p.x = SPAWN.x; p.y = SPAWN.y;
+      send(p.ws, { type: 'death', x: p.x, y: p.y });
+      broadcast({ type: 'chat', from: 'СИСТЕМА', text: `${p.name} не выжил и возродился` });
+    }
+  }
+}, 1000);
+
+// Раз в 15 секунд сохраняем позиции и статы активных персонажей
 setInterval(() => {
   for (const p of players.values()) {
-    characters.savePosition(p.charId, Math.round(p.x), Math.round(p.y));
+    characters.saveState(p.charId, snapshotState(p));
   }
 }, 15000);
 
