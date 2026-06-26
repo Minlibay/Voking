@@ -67,7 +67,8 @@
 
     // Моя локальная позиция (двигаем мгновенно, серверу шлём обновления)
     const me = { x: 0, y: 0, dir: 0 };
-    const SPEED = 240;            // пикселей в секунду
+    window.me = me;               // удобно для отладки/тестов из консоли
+    const SPEED = 240;            // мировых единиц в секунду
     let players = [];             // последний снимок мира с сервера
 
     const keys = {};
@@ -175,12 +176,13 @@
       const dt = Math.min((now - lastTime) / 1000, 0.05);
       lastTime = now;
 
-      // движение
+      // движение: WASD ориентированы по экрану (в изометрии экранные
+      // направления = диагонали в мировых координатах)
       let dx = 0, dy = 0;
-      if (keys['w'] || keys['arrowup']) dy -= 1;
-      if (keys['s'] || keys['arrowdown']) dy += 1;
-      if (keys['a'] || keys['arrowleft']) dx -= 1;
-      if (keys['d'] || keys['arrowright']) dx += 1;
+      if (keys['w'] || keys['arrowup'])    { dx -= 1; dy -= 1; }
+      if (keys['s'] || keys['arrowdown'])  { dx += 1; dy += 1; }
+      if (keys['a'] || keys['arrowleft'])  { dx -= 1; dy += 1; }
+      if (keys['d'] || keys['arrowright']) { dx += 1; dy -= 1; }
       if (dx || dy) {
         const len = Math.hypot(dx, dy);
         me.x = Math.max(0, Math.min(world.width, me.x + (dx / len) * SPEED * dt));
@@ -198,57 +200,124 @@
       requestAnimationFrame(loop);
     }
 
+    // --- Изометрическая проекция -------------------------------------------
+    // Мировые координаты (x,y) -> экранные. Соотношение 2:1 (классическая изо).
+    const ISO_X = 0.5;    // горизонтальное сжатие
+    const ISO_Y = 0.25;   // вертикальное сжатие
+    const TILE = 100;     // размер тайла в мировых единицах
+
+    function toIso(wx, wy) {
+      return { x: (wx - wy) * ISO_X, y: (wx + wy) * ISO_Y };
+    }
+
     function draw() {
-      ctx.fillStyle = '#0d1117';
+      // фон-небо
+      const sky = ctx.createLinearGradient(0, 0, 0, canvas.height);
+      sky.addColorStop(0, '#1a2238');
+      sky.addColorStop(1, '#0d1117');
+      ctx.fillStyle = sky;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      // камера следует за игроком
-      const camX = me.x - canvas.width / 2;
-      const camY = me.y - canvas.height / 2;
+      // камера: центрируем экран на изо-позиции игрока
+      const meIso = toIso(me.x, me.y);
+      const camX = meIso.x - canvas.width / 2;
+      const camY = meIso.y - canvas.height / 2;
+      const sx = (wx, wy) => toIso(wx, wy).x - camX;
+      const sy = (wx, wy) => toIso(wx, wy).y - camY;
 
-      // сетка
-      ctx.strokeStyle = 'rgba(255,255,255,0.05)';
-      ctx.lineWidth = 1;
-      const grid = 100;
-      const startX = -((camX % grid) + grid) % grid;
-      const startY = -((camY % grid) + grid) % grid;
-      for (let x = startX; x < canvas.width; x += grid) {
-        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke();
-      }
-      for (let y = startY; y < canvas.height; y += grid) {
-        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke();
+      // --- Земля: ромбовидные тайлы в шахматном порядке --------------------
+      const cols = Math.ceil(world.width / TILE);
+      const rows = Math.ceil(world.height / TILE);
+      for (let i = 0; i < cols; i++) {
+        for (let j = 0; j < rows; j++) {
+          const wx = i * TILE, wy = j * TILE;
+          // верхняя вершина ромба
+          const top = { x: sx(wx, wy), y: sy(wx, wy) };
+          // грубый отсев тайлов за пределами экрана
+          if (top.x < -TILE || top.x > canvas.width + TILE || top.y < -TILE || top.y > canvas.height + TILE) continue;
+          const right = { x: sx(wx + TILE, wy), y: sy(wx + TILE, wy) };
+          const bottom = { x: sx(wx + TILE, wy + TILE), y: sy(wx + TILE, wy + TILE) };
+          const left = { x: sx(wx, wy + TILE), y: sy(wx, wy + TILE) };
+
+          ctx.beginPath();
+          ctx.moveTo(top.x, top.y);
+          ctx.lineTo(right.x, right.y);
+          ctx.lineTo(bottom.x, bottom.y);
+          ctx.lineTo(left.x, left.y);
+          ctx.closePath();
+          ctx.fillStyle = (i + j) % 2 === 0 ? '#1f3d2b' : '#24472f';   // трава, шахматка
+          ctx.fill();
+          ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        }
       }
 
-      // граница мира
-      ctx.strokeStyle = 'rgba(233,69,96,0.5)';
+      // граница мира (ромб по периметру)
+      ctx.strokeStyle = 'rgba(233,69,96,0.6)';
       ctx.lineWidth = 3;
-      ctx.strokeRect(-camX, -camY, world.width, world.height);
+      ctx.beginPath();
+      ctx.moveTo(sx(0, 0), sy(0, 0));
+      ctx.lineTo(sx(world.width, 0), sy(world.width, 0));
+      ctx.lineTo(sx(world.width, world.height), sy(world.width, world.height));
+      ctx.lineTo(sx(0, world.height), sy(0, world.height));
+      ctx.closePath();
+      ctx.stroke();
 
-      // игроки
-      for (const p of players) {
-        const x = (p.id === myId ? me.x : p.x) - camX;
-        const y = (p.id === myId ? me.y : p.y) - camY;
+      // --- Персонажи: сортировка по глубине (дальние рисуем первыми) -------
+      const drawList = players.map(p => {
+        const wx = p.id === myId ? me.x : p.x;
+        const wy = p.id === myId ? me.y : p.y;
+        return { p, wx, wy, depth: wx + wy };
+      }).sort((a, b) => a.depth - b.depth);
 
-        // тело
-        ctx.beginPath();
-        ctx.arc(x, y, radius, 0, Math.PI * 2);
-        ctx.fillStyle = p.color;
-        ctx.fill();
-        if (p.id === myId) { ctx.lineWidth = 3; ctx.strokeStyle = '#fff'; ctx.stroke(); }
-
-        // «глаз» — направление взгляда
-        const dir = p.id === myId ? me.dir : p.dir;
-        ctx.beginPath();
-        ctx.arc(x + Math.cos(dir) * radius * 0.5, y + Math.sin(dir) * radius * 0.5, radius * 0.28, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(0,0,0,0.55)';
-        ctx.fill();
-
-        // имя
-        ctx.font = '13px Segoe UI, sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillStyle = '#fff';
-        ctx.fillText(p.name, x, y - radius - 6);
+      for (const { p, wx, wy } of drawList) {
+        const x = sx(wx, wy);
+        const y = sy(wx, wy);
+        drawCharacter(x, y, p.color, p.name, p.id === myId);
       }
+    }
+
+    // Рисует фигурку персонажа: тень, тело-капля, голова, имя
+    function drawCharacter(x, y, color, name, isMe) {
+      const R = radius;
+
+      // тень на земле (изо-эллипс)
+      ctx.beginPath();
+      ctx.ellipse(x, y, R * 1.1, R * 0.55, 0, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0,0,0,0.35)';
+      ctx.fill();
+
+      // тело (капля, приподнята над тенью)
+      const bodyY = y - R * 1.1;
+      ctx.beginPath();
+      ctx.moveTo(x, y);                               // нижний кончик у ног
+      ctx.quadraticCurveTo(x - R, y - R, x - R * 0.7, bodyY);
+      ctx.arc(x, bodyY, R * 0.7, Math.PI, 0, false);  // плечи
+      ctx.quadraticCurveTo(x + R, y - R, x, y);
+      ctx.closePath();
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.lineWidth = isMe ? 3 : 1.5;
+      ctx.strokeStyle = isMe ? '#fff' : 'rgba(0,0,0,0.4)';
+      ctx.stroke();
+
+      // голова
+      const headY = bodyY - R * 0.5;
+      ctx.beginPath();
+      ctx.arc(x, headY, R * 0.5, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.stroke();
+
+      // имя над головой
+      ctx.font = '13px Segoe UI, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+      ctx.strokeText(name, x, headY - R * 0.9);
+      ctx.fillStyle = '#fff';
+      ctx.fillText(name, x, headY - R * 0.9);
     }
 
     function startGame() {

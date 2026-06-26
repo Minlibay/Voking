@@ -88,6 +88,9 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 404, { error: 'Неизвестный метод API' });
   }
 
+  // браузер сам просит favicon — отвечаем пусто, чтобы не было 404
+  if (urlPath === '/favicon.ico') { res.writeHead(204); return res.end(); }
+
   // --- Статика -------------------------------------------------------------
   if (urlPath === '/') urlPath = '/index.html';
 
