@@ -59,8 +59,8 @@ function validate(username, password) {
   return null;
 }
 
-// Список администраторов из переменной окружения (через запятую)
-const ADMIN_USERS = (process.env.ADMIN_USERS || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+// Кто админ — определяется конфигом (config.json / ADMIN_USERS), а не записью аккаунта
+const config = require('./config');
 
 // --- Публичный API ---------------------------------------------------------
 function register(username, password) {
@@ -70,11 +70,8 @@ function register(username, password) {
   username = username.trim();
   if (users.has(username.toLowerCase())) return { error: 'Такое имя уже занято' };
 
-  // Первый зарегистрированный аккаунт становится админом (или указанный в ADMIN_USERS)
-  const isAdmin = users.size === 0 || ADMIN_USERS.includes(username.toLowerCase());
-
   const salt = crypto.randomBytes(16).toString('hex');
-  const user = { username, salt, hash: hashPassword(password, salt), isAdmin, createdAt: Date.now() };
+  const user = { username, salt, hash: hashPassword(password, salt), createdAt: Date.now() };
   users.set(username.toLowerCase(), user);
   save();
 
@@ -90,7 +87,7 @@ function login(username, password) {
   }
   const token = newToken();
   sessions.set(token, { username: user.username, createdAt: Date.now() });
-  return { token, username: user.username, isAdmin: !!user.isAdmin };
+  return { token, username: user.username, isAdmin: config.isAdmin(user.username) };
 }
 
 // Возвращает имя пользователя по токену, либо null
@@ -99,12 +96,12 @@ function verifyToken(token) {
   return s ? s.username : null;
 }
 
-// Возвращает имя админа по токену, либо null (если не админ / токен невалиден)
+// Возвращает имя админа по токену, либо null (если не админ / токен невалиден).
+// Админство берётся из config.json «на лету», без перезапуска сервера.
 function verifyAdmin(token) {
   const s = sessions.get(token);
   if (!s) return null;
-  const user = users.get(s.username.toLowerCase());
-  return user && user.isAdmin ? user.username : null;
+  return config.isAdmin(s.username) ? s.username : null;
 }
 
 function logout(token) {
