@@ -1,0 +1,13 @@
+{
+  "name": "voking-online",
+  "version": "0.1.0",
+  "description": "Многопользовательский онлайн-мир (основа MMO) на Node.js + WebSocket",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.21.0"
+  }
+}
