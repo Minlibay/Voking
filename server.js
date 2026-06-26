@@ -41,9 +41,29 @@ const SURVIVAL = {
   regenThreshold: 40,     // порог сытости/бодрости для регена
 };
 
+// --- Зомби (ночная угроза) -------------------------------------------------
+const ZOMBIE = {
+  speed: 105,             // медленнее игрока (240) — можно убегать
+  health: 100,
+  damage: 7,              // урон игроку за укус
+  attackRange: 34,        // дистанция укуса
+  attackCooldown: 900,    // мс между укусами
+  playerHitDamage: 40,    // урон зомби от удара игрока (≈3 удара)
+  spawnRadius: [450, 800],// на каком расстоянии от игрока появляются
+  maxPerPlayer: 6,        // размер орды на одного игрока
+  spawnBatch: 2,          // сколько появляется за один спавн-тик
+};
+
 // --- Состояние --------------------------------------------------------------
 const players = new Map();        // id -> { id, name, x, y, color, dir, ws }
+const zombies = new Map();        // id -> { id, x, y, health, dir, lastAttack }
 let nextId = 1;
+let nextZombieId = 1;
+let wasNight = false;             // для отслеживания смены дня/ночи
+
+// FORCE_NIGHT=1 — всегда ночь (для тестов и отладки орды)
+const FORCE_NIGHT = process.env.FORCE_NIGHT === '1';
+function isNight(t = worldTime()) { return FORCE_NIGHT || t.hour < 6 || t.hour >= 20; }
 
 // --- Раздача статики (клиент игры) -----------------------------------------
 const MIME = {
@@ -235,6 +255,21 @@ wss.on('connection', (ws) => {
         break;
       }
 
+      case 'attack': {
+        if (!player) break;
+        const t = Date.now();
+        if (t - (player.lastAttack || 0) < 400) break;   // кулдаун атаки
+        player.lastAttack = t;
+        const RANGE = 60;
+        for (const [zid, z] of zombies) {
+          if (Math.hypot(z.x - player.x, z.y - player.y) <= RANGE) {
+            z.health -= ZOMBIE.playerHitDamage;
+            if (z.health <= 0) zombies.delete(zid);
+          }
+        }
+        break;
+      }
+
       case 'chat': {
         if (!player) break;
         const text = String(msg.text || '').slice(0, 120).trim();
@@ -274,8 +309,22 @@ setInterval(() => {
       health: Math.round(p.health), hunger: Math.round(p.hunger), energy: Math.round(p.energy),
     });
   }
-  broadcast({ type: 'state', players: snapshot, time: worldTime() });
+  const zoms = [];
+  for (const z of zombies.values()) {
+    zoms.push({ id: z.id, x: Math.round(z.x), y: Math.round(z.y), dir: z.dir, health: Math.round(z.health) });
+  }
+  broadcast({ type: 'state', players: snapshot, zombies: zoms, time: worldTime() });
 }, 1000 / TICK_RATE);
+
+// Возрождает игрока, если его здоровье на нуле. Возвращает true, если возродил.
+function respawnIfDead(p, reason) {
+  if (p.health > 0) return false;
+  p.health = 100; p.hunger = 70; p.energy = 70;
+  p.x = SPAWN.x; p.y = SPAWN.y;
+  send(p.ws, { type: 'death', x: p.x, y: p.y });
+  broadcast({ type: 'chat', from: 'СИСТЕМА', text: `${p.name} ${reason}` });
+  return true;
+}
 
 // Множитель скорости выживания (для тестов/балансировки): SURVIVAL_SPEED=60 ускоряет
 const SPEED_MULT = Number(process.env.SURVIVAL_SPEED) || 1;
@@ -299,15 +348,70 @@ setInterval(() => {
     }
     p.health = Math.max(0, Math.min(100, p.health + dh * SPEED_MULT));
 
-    // смерть и возрождение
-    if (p.health <= 0) {
-      p.health = 100; p.hunger = 70; p.energy = 70;
-      p.x = SPAWN.x; p.y = SPAWN.y;
-      send(p.ws, { type: 'death', x: p.x, y: p.y });
-      broadcast({ type: 'chat', from: 'СИСТЕМА', text: `${p.name} не выжил и возродился` });
-    }
+    respawnIfDead(p, 'не выжил и возродился');
   }
 }, 1000);
+
+// --- Спавн орды зомби и смена дня/ночи (раз в 1.5с) -------------------------
+setInterval(() => {
+  const night = isNight();
+
+  // переход дня/ночи
+  if (night && !wasNight) {
+    broadcast({ type: 'chat', from: 'СИСТЕМА', text: '🌙 Наступает ночь — берегитесь орды зомби!' });
+  } else if (!night && wasNight) {
+    zombies.clear();   // на рассвете орда исчезает
+    broadcast({ type: 'chat', from: 'СИСТЕМА', text: '☀️ Рассвет — орда отступила.' });
+  }
+  wasNight = night;
+
+  // спавн зомби ночью рядом со случайными игроками
+  if (night && players.size > 0) {
+    const cap = players.size * ZOMBIE.maxPerPlayer;
+    const targets = [...players.values()];
+    for (let n = 0; n < ZOMBIE.spawnBatch && zombies.size < cap; n++) {
+      const tp = targets[Math.floor(Math.random() * targets.length)];
+      const ang = Math.random() * Math.PI * 2;
+      const [rmin, rmax] = ZOMBIE.spawnRadius;
+      const dist = rmin + Math.random() * (rmax - rmin);
+      const z = {
+        id: nextZombieId++,
+        x: clamp(tp.x + Math.cos(ang) * dist, 0, WORLD.width),
+        y: clamp(tp.y + Math.sin(ang) * dist, 0, WORLD.height),
+        health: ZOMBIE.health, dir: 0, lastAttack: 0,
+      };
+      zombies.set(z.id, z);
+    }
+  }
+}, 1500);
+
+// --- ИИ зомби: движение к ближайшему игроку и укусы (10 раз в секунду) ------
+const ZOMBIE_DT = 0.1;
+setInterval(() => {
+  if (zombies.size === 0) return;
+  const now = Date.now();
+  for (const z of zombies.values()) {
+    // ближайший игрок
+    let target = null, best = Infinity;
+    for (const p of players.values()) {
+      const d = Math.hypot(p.x - z.x, p.y - z.y);
+      if (d < best) { best = d; target = p; }
+    }
+    if (!target) continue;
+
+    if (best > ZOMBIE.attackRange) {
+      const vx = (target.x - z.x) / best, vy = (target.y - z.y) / best;
+      z.x += vx * ZOMBIE.speed * ZOMBIE_DT;
+      z.y += vy * ZOMBIE.speed * ZOMBIE_DT;
+      z.dir = Math.atan2(vy, vx);
+    } else if (now - z.lastAttack >= ZOMBIE.attackCooldown) {
+      z.lastAttack = now;
+      target.health = Math.max(0, target.health - ZOMBIE.damage);
+      send(target.ws, { type: 'hurt' });
+      respawnIfDead(target, 'был растерзан ордой зомби и возродился');
+    }
+  }
+}, ZOMBIE_DT * 1000);
 
 // Раз в 15 секунд сохраняем позиции и статы активных персонажей
 setInterval(() => {

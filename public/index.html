@@ -72,7 +72,7 @@
   </div>
 
   <div class="hint" style="display:none" id="hint">
-    Движение: WASD / стрелки<br>Чат: Enter
+    Движение: WASD / стрелки<br>Атака: Пробел · Чат: Enter
   </div>
 
   <div id="chat" style="display:none">
@@ -104,6 +104,9 @@
     window.me = me;               // удобно для отладки/тестов из консоли
     const SPEED = 240;            // мировых единиц в секунду
     let players = [];             // последний снимок мира с сервера
+    let zombies = [];             // зомби из снимка мира
+    let swingUntil = 0;           // до какого времени рисовать взмах атаки
+    let hurtUntil = 0;            // до какого времени рисовать «получил урон»
 
     // --- Конфиг мира из админки (земля, объекты, спрайты) ------------------
     let worldConfig = { ground: { colorA: '#1f3d2b', colorB: '#24472f' }, objects: [], playerSprite: null, objectSprites: [] };
@@ -158,6 +161,7 @@
           startGame();
         } else if (msg.type === 'state') {
           players = msg.players;
+          zombies = msg.zombies || [];
           document.getElementById('count').textContent = players.length;
           const mine = players.find(p => p.id === myId);
           if (mine) {
@@ -169,6 +173,8 @@
           // сервер возродил персонажа — телепортируемся на спаун и показываем экран
           me.x = msg.x; me.y = msg.y;
           showDeath();
+        } else if (msg.type === 'hurt') {
+          hurtUntil = performance.now() + 250;   // красная вспышка по краям
         } else if (msg.type === 'world') {
           // админ что-то изменил — обновляем мир «вживую»
           applyWorldConfig(msg.config);
@@ -255,9 +261,19 @@
     });
 
     // --- Управление --------------------------------------------------------
+    let lastAttackSent = 0;
+    function attack() {
+      const now = performance.now();
+      if (now - lastAttackSent < 400) return;
+      lastAttackSent = now;
+      swingUntil = now + 180;
+      if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'attack' }));
+    }
+
     window.addEventListener('keydown', (e) => {
       if (chatFocused) return;     // печатаем в чат — не управляем персонажем
       if (e.key === 'Enter') { e.preventDefault(); chatInput.focus(); return; }
+      if (e.code === 'Space') { e.preventDefault(); attack(); return; }
       keys[e.key.toLowerCase()] = true;
     });
     window.addEventListener('keyup', (e) => {
@@ -380,6 +396,9 @@
         const wy = p.id === myId ? me.y : p.y;
         drawList.push({ kind: 'player', p, wx, wy, depth: wx + wy });
       }
+      for (const z of zombies) {
+        drawList.push({ kind: 'zombie', z, wx: z.x, wy: z.y, depth: z.x + z.y });
+      }
       drawList.sort((a, b) => a.depth - b.depth);   // дальние (меньше x+y) — первыми
 
       for (const item of drawList) {
@@ -388,6 +407,23 @@
 
         if (item.kind === 'object') {
           drawObject(x, y, item.o);
+          continue;
+        }
+
+        if (item.kind === 'zombie') {
+          const z = item.z;
+          let za = anim.get('z' + z.id);
+          if (!za) { za = { phase: Math.random() * 6, lastX: item.wx, lastY: item.wy, lastMove: 0, facing: 1 }; anim.set('z' + z.id, za); }
+          const zmoved = Math.hypot(item.wx - za.lastX, item.wy - za.lastY);
+          if (zmoved > 0.4) {
+            za.lastMove = now;
+            const svx = (item.wx - za.lastX) - (item.wy - za.lastY);
+            if (Math.abs(svx) > 0.01) za.facing = svx < 0 ? -1 : 1;
+          }
+          za.lastX = item.wx; za.lastY = item.wy;
+          const zmoving = (now - za.lastMove) < 200;
+          za.phase += fdt * (zmoving ? 7 : 1.5);
+          drawCharacter(x, y, '#6b8e23', '', false, za, zmoving, now, z.health);
           continue;
         }
 
@@ -414,15 +450,40 @@
         }
       }
 
-      // подчищаем состояние ушедших игроков
-      if (anim.size > players.length + 5) {
-        const live = new Set(players.map(p => p.id));
+      // взмах атаки вокруг своего персонажа
+      if (now < swingUntil) {
+        const meScreen = { x: sx(me.x, me.y), y: sy(me.x, me.y) };
+        const prog = 1 - (swingUntil - now) / 180;
+        ctx.save();
+        ctx.strokeStyle = `rgba(255,255,255,${0.8 * (1 - prog)})`;
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.arc(meScreen.x, meScreen.y - radius, radius * 2.2, -0.4 + prog * 3, 0.6 + prog * 3);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // подчищаем состояние исчезнувших игроков и зомби
+      if (anim.size > players.length + zombies.length + 8) {
+        const live = new Set([...players.map(p => p.id), ...zombies.map(z => 'z' + z.id)]);
         for (const id of anim.keys()) if (!live.has(id)) anim.delete(id);
       }
 
       // затемнение ночью (синеватая вуаль поверх всей сцены)
       if (nightDarkness > 0.01) {
         ctx.fillStyle = `rgba(8, 14, 38, ${nightDarkness})`;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      }
+
+      // вспышка по краям экрана, когда получаешь урон
+      if (now < hurtUntil) {
+        const a = (hurtUntil - now) / 250;
+        const grd = ctx.createRadialGradient(
+          canvas.width / 2, canvas.height / 2, Math.min(canvas.width, canvas.height) * 0.3,
+          canvas.width / 2, canvas.height / 2, Math.max(canvas.width, canvas.height) * 0.7);
+        grd.addColorStop(0, 'rgba(180,0,0,0)');
+        grd.addColorStop(1, `rgba(180,0,0,${0.5 * a})`);
+        ctx.fillStyle = grd;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
       }
     }
