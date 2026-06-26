@@ -11,25 +11,6 @@
 
     canvas { display: block; position: fixed; inset: 0; }
 
-    /* --- Экран входа --- */
-    #login {
-      position: fixed; inset: 0; z-index: 20;
-      display: flex; flex-direction: column; align-items: center; justify-content: center;
-      gap: 16px; background: radial-gradient(circle at 50% 40%, #16213e, #0d1117);
-    }
-    #login h1 { font-size: 2.4rem; letter-spacing: 1px; }
-    #login p { opacity: 0.65; margin-bottom: 8px; }
-    #login input {
-      font: inherit; padding: 12px 16px; border-radius: 12px;
-      border: 1px solid rgba(255,255,255,0.18); background: rgba(255,255,255,0.06);
-      color: #fff; width: 260px; text-align: center;
-    }
-    #login button {
-      font: inherit; font-weight: 600; padding: 12px 28px; border-radius: 12px;
-      border: none; background: #e94560; color: #fff; cursor: pointer; transition: background .2s;
-    }
-    #login button:hover { background: #ff5670; }
-
     /* --- HUD --- */
     #hud {
       position: fixed; top: 12px; left: 12px; z-index: 10;
@@ -61,15 +42,10 @@
 <body>
   <canvas id="game"></canvas>
 
-  <div id="login">
-    <h1>🌍 Voking Online</h1>
-    <p>Общий мир в реальном времени. Введи имя и заходи.</p>
-    <input id="nameInput" maxlength="16" placeholder="Имя персонажа" autocomplete="off" />
-    <button id="playBtn">Войти в мир</button>
-  </div>
-
   <div id="hud" style="display:none">
-    Игроков онлайн: <b id="count">1</b>
+    <span id="whoami" style="color:#facc15;font-weight:600"></span>
+    &nbsp;·&nbsp; Онлайн: <b id="count">1</b>
+    &nbsp; <button id="logoutBtn" style="font:inherit;pointer-events:auto;cursor:pointer;background:rgba(233,69,96,0.25);color:#fff;border:1px solid rgba(233,69,96,0.5);border-radius:7px;padding:2px 8px;font-size:0.78rem">Выйти</button>
   </div>
 
   <div class="hint" style="display:none" id="hint">
@@ -105,14 +81,18 @@
 
     // --- Подключение -------------------------------------------------------
     let ws;
-    function connect(name) {
+    function connect(token) {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
       ws = new WebSocket(`${proto}://${location.host}`);
 
-      ws.onopen = () => ws.send(JSON.stringify({ type: 'join', name }));
+      ws.onopen = () => ws.send(JSON.stringify({ type: 'join', token }));
 
       ws.onmessage = (e) => {
         const msg = JSON.parse(e.data);
+        if (msg.type === 'authError') {
+          logout();
+          return;
+        }
         if (msg.type === 'welcome') {
           myId = msg.id;
           world = msg.world;
@@ -259,7 +239,6 @@
     }
 
     function startGame() {
-      document.getElementById('login').style.display = 'none';
       document.getElementById('hud').style.display = 'block';
       document.getElementById('chat').style.display = 'block';
       document.getElementById('hint').style.display = 'block';
@@ -267,15 +246,22 @@
       requestAnimationFrame(loop);
     }
 
-    // --- Вход --------------------------------------------------------------
-    const nameInput = document.getElementById('nameInput');
-    function play() {
-      const name = nameInput.value.trim() || 'Игрок' + Math.floor(Math.random() * 1000);
-      connect(name);
+    // --- Вход по аккаунту --------------------------------------------------
+    function logout() {
+      localStorage.removeItem('voking_token');
+      localStorage.removeItem('voking_name');
+      location.href = '/login.html';
     }
-    document.getElementById('playBtn').addEventListener('click', play);
-    nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') play(); });
-    nameInput.focus();
+    document.getElementById('logoutBtn').addEventListener('click', logout);
+
+    // Требуем авторизацию: без токена — на страницу входа
+    const token = localStorage.getItem('voking_token');
+    if (!token) {
+      location.href = '/login.html';
+    } else {
+      document.getElementById('whoami').textContent = localStorage.getItem('voking_name') || '';
+      connect(token);
+    }
   </script>
 </body>
 </html>

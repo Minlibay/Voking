@@ -7,6 +7,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { WebSocketServer } = require('ws');
+const auth = require('./auth');
 
 const PORT = process.env.PORT || 3000;
 
@@ -29,8 +30,46 @@ const MIME = {
   '.ico': 'image/x-icon',
 };
 
-const server = http.createServer((req, res) => {
+// Читает тело запроса и парсит JSON (с ограничением размера)
+function readJsonBody(req) {
+  return new Promise((resolve) => {
+    let body = '';
+    req.on('data', (chunk) => {
+      body += chunk;
+      if (body.length > 1e5) req.destroy();   // защита от слишком больших тел
+    });
+    req.on('end', () => {
+      try { resolve(JSON.parse(body || '{}')); } catch { resolve(null); }
+    });
+  });
+}
+
+function sendJson(res, code, obj) {
+  res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
+  res.end(JSON.stringify(obj));
+}
+
+const server = http.createServer(async (req, res) => {
   let urlPath = decodeURIComponent(req.url.split('?')[0]);
+
+  // --- API аутентификации --------------------------------------------------
+  if (urlPath.startsWith('/api/')) {
+    if (req.method !== 'POST') return sendJson(res, 405, { error: 'Только POST' });
+    const body = await readJsonBody(req);
+    if (!body) return sendJson(res, 400, { error: 'Некорректный запрос' });
+
+    if (urlPath === '/api/register') {
+      const result = auth.register(body.username, body.password);
+      return sendJson(res, result.error ? 400 : 200, result);
+    }
+    if (urlPath === '/api/login') {
+      const result = auth.login(body.username, body.password);
+      return sendJson(res, result.error ? 401 : 200, result);
+    }
+    return sendJson(res, 404, { error: 'Неизвестный метод API' });
+  }
+
+  // --- Статика -------------------------------------------------------------
   if (urlPath === '/') urlPath = '/index.html';
 
   const filePath = path.join(__dirname, 'public', path.normalize(urlPath));
@@ -75,7 +114,13 @@ wss.on('connection', (ws) => {
 
     switch (msg.type) {
       case 'join': {
-        const name = String(msg.name || 'Безымянный').slice(0, 16).trim() || 'Безымянный';
+        // имя берём не из клиента, а из проверенного токена сессии
+        const name = auth.verifyToken(msg.token);
+        if (!name) {
+          send(ws, { type: 'authError', message: 'Сессия недействительна, войдите заново' });
+          ws.close();
+          break;
+        }
         player = {
           id,
           name,
