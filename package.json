@@ -8,7 +8,9 @@
     "start": "node server.js"
   },
   "dependencies": {
-    "playwright-core": "^1.61.1",
     "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.61.1"
   }
 }
