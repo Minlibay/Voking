@@ -17,7 +17,8 @@ const OBJ_SPRITES_DIR = path.join(SPRITES_DIR, 'objects');
 
 let config = {
   ground: { colorA: '#1f3d2b', colorB: '#24472f' },
-  objects: [],   // { id, sprite, x, y, scale }
+  objects: [],     // { id, sprite, x, y, scale }
+  locations: [],   // { id, name, x, y, w, h, color }
 };
 
 function ensureDirs() {
@@ -58,6 +59,7 @@ function publicConfig() {
   return {
     ground: config.ground,
     objects: config.objects,
+    locations: config.locations || [],
     playerSprite: playerSprite(),
     objectSprites: objectSprites(),
   };
@@ -115,9 +117,34 @@ function removeObject(id) {
   return { ok: true };
 }
 
+// --- Локации (именованные зоны) -------------------------------------------
+function addLocation(name, x, y, w, h, color) {
+  name = String(name || '').trim().slice(0, 32);
+  if (!name) return { error: 'Укажите название локации' };
+  // нормализуем прямоугольник (ширина/высота положительные)
+  x = Math.round(Number(x) || 0); y = Math.round(Number(y) || 0);
+  w = Math.round(Number(w) || 0); h = Math.round(Number(h) || 0);
+  if (w < 0) { x += w; w = -w; }
+  if (h < 0) { y += h; h = -h; }
+  if (w < 20 || h < 20) return { error: 'Слишком маленькая область — выдели побольше' };
+  const col = /^#[0-9a-fA-F]{6}$/.test(color) ? color : '#38bdf8';
+  const loc = { id: crypto.randomBytes(6).toString('hex'), name, x, y, w, h, color: col };
+  if (!config.locations) config.locations = [];
+  config.locations.push(loc);
+  save();
+  return { ok: true, location: loc };
+}
+
+function removeLocation(id) {
+  config.locations = (config.locations || []).filter(l => l.id !== id);
+  save();
+  return { ok: true };
+}
+
 load();
 
 module.exports = {
   publicConfig,
   uploadPlayerSprite, uploadObjectSprite, setGround, addObject, removeObject,
+  addLocation, removeLocation,
 };

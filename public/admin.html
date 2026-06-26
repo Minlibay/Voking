@@ -102,6 +102,25 @@
 
     <div class="objlist" id="objList"></div>
   </div>
+
+  <!-- Локации -->
+  <div class="card">
+    <h2>📍 Локации (именованные зоны)</h2>
+    <p class="hint">Зажми и протяни по карте, чтобы выделить область. Затем впиши название и создай локацию — игроки увидят её имя при входе в зону.</p>
+
+    <div class="row">
+      <input type="text" id="locName" placeholder="название (Тёмный лес, Руины…)" style="max-width:240px" maxlength="32" />
+      <label class="sm" style="margin:0">Цвет</label><input type="color" id="locColor" value="#38bdf8" />
+      <button id="addLoc">Создать локацию</button>
+    </div>
+
+    <div style="margin-top:12px">
+      <canvas id="locMap" width="320" height="320"></canvas>
+    </div>
+    <div class="msg" id="locMsg"></div>
+
+    <div class="objlist" id="locList"></div>
+  </div>
 </div>
 
 <script>
@@ -223,6 +242,80 @@
     });
   }
 
+  // --- Локации: рисуем область перетаскиванием по мини-карте ---
+  const locCanvas = document.getElementById('locMap');
+  const lctx = locCanvas.getContext('2d');
+  let dragStart = null, dragNow = null, pendingRect = null;
+
+  function drawLocMap() {
+    lctx.fillStyle = '#14241a'; lctx.fillRect(0, 0, MAP, MAP);
+    lctx.strokeStyle = 'rgba(233,69,96,0.5)'; lctx.strokeRect(0, 0, MAP, MAP);
+    lctx.strokeStyle = 'rgba(255,255,255,0.06)';
+    for (let i = 1; i < 10; i++) { const p = i / 10 * MAP; lctx.beginPath(); lctx.moveTo(p,0); lctx.lineTo(p,MAP); lctx.moveTo(0,p); lctx.lineTo(MAP,p); lctx.stroke(); }
+    // существующие локации
+    for (const l of (config.locations || [])) {
+      lctx.fillStyle = l.color + '33';
+      lctx.strokeStyle = l.color;
+      lctx.fillRect(l.x * SCALE, l.y * SCALE, l.w * SCALE, l.h * SCALE);
+      lctx.strokeRect(l.x * SCALE, l.y * SCALE, l.w * SCALE, l.h * SCALE);
+      lctx.fillStyle = '#fff'; lctx.font = '11px Segoe UI'; lctx.textAlign = 'center';
+      lctx.fillText(l.name, (l.x + l.w / 2) * SCALE, (l.y + l.h / 2) * SCALE);
+    }
+    // текущее выделение
+    if (dragStart && dragNow) {
+      lctx.strokeStyle = document.getElementById('locColor').value;
+      lctx.lineWidth = 2;
+      lctx.strokeRect(dragStart.x, dragStart.y, dragNow.x - dragStart.x, dragNow.y - dragStart.y);
+      lctx.lineWidth = 1;
+    }
+  }
+  function locPos(e) {
+    const r = locCanvas.getBoundingClientRect();
+    return { x: Math.max(0, Math.min(MAP, e.clientX - r.left)), y: Math.max(0, Math.min(MAP, e.clientY - r.top)) };
+  }
+  locCanvas.addEventListener('mousedown', (e) => { dragStart = locPos(e); dragNow = dragStart; pendingRect = null; drawLocMap(); });
+  locCanvas.addEventListener('mousemove', (e) => { if (dragStart) { dragNow = locPos(e); drawLocMap(); } });
+  window.addEventListener('mouseup', () => {
+    if (dragStart && dragNow) {
+      const x = Math.round(Math.min(dragStart.x, dragNow.x) / SCALE);
+      const y = Math.round(Math.min(dragStart.y, dragNow.y) / SCALE);
+      const w = Math.round(Math.abs(dragNow.x - dragStart.x) / SCALE);
+      const h = Math.round(Math.abs(dragNow.y - dragStart.y) / SCALE);
+      if (w >= 20 && h >= 20) pendingRect = { x, y, w, h };
+    }
+    dragStart = null; dragNow = null;
+  });
+
+  document.getElementById('addLoc').addEventListener('click', async () => {
+    const name = document.getElementById('locName').value.trim();
+    if (!name) return setMsg(document.getElementById('locMsg'), 'Впиши название', false);
+    if (!pendingRect) return setMsg(document.getElementById('locMsg'), 'Сначала выдели область на карте (зажми и протяни)', false);
+    const r = await api('add-location', { name, color: document.getElementById('locColor').value, ...pendingRect });
+    if (r.error) return setMsg(document.getElementById('locMsg'), r.error, false);
+    config = r.config; pendingRect = null;
+    document.getElementById('locName').value = '';
+    drawLocMap(); renderLocList();
+    setMsg(document.getElementById('locMsg'), `Локация «${name}» создана`, true);
+  });
+
+  function renderLocList() {
+    const box = document.getElementById('locList');
+    box.innerHTML = '';
+    (config.locations || []).forEach(l => {
+      const row = document.createElement('div');
+      row.className = 'o';
+      row.innerHTML = `<span style="display:inline-block;width:14px;height:14px;border-radius:3px;background:${l.color}"></span> <span>${l.name} · (${l.x}, ${l.y}) · ${l.w}×${l.h}</span>`;
+      const del = document.createElement('button');
+      del.className = 'del'; del.textContent = 'Удалить'; del.style.marginLeft = 'auto';
+      del.addEventListener('click', async () => {
+        const r = await api('remove-location', { id: l.id });
+        config = r.config; drawLocMap(); renderLocList();
+      });
+      row.appendChild(del);
+      box.appendChild(row);
+    });
+  }
+
   // --- Старт: проверяем права админа ---
   (async () => {
     const r = await api('check');
@@ -234,6 +327,8 @@
     renderSpritePills();
     drawMap();
     renderObjList();
+    drawLocMap();
+    renderLocList();
   })();
 </script>
 </body>

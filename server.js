@@ -179,6 +179,8 @@ const server = http.createServer(async (req, res) => {
       else if (urlPath === '/api/admin/set-ground') result = world.setGround(body.colorA, body.colorB);
       else if (urlPath === '/api/admin/add-object') result = world.addObject(body.sprite, body.x, body.y, body.scale);
       else if (urlPath === '/api/admin/remove-object') result = world.removeObject(body.id);
+      else if (urlPath === '/api/admin/add-location') result = world.addLocation(body.name, body.x, body.y, body.w, body.h, body.color);
+      else if (urlPath === '/api/admin/remove-location') result = world.removeLocation(body.id);
       else return sendJson(res, 404, { error: 'Неизвестный метод админки' });
 
       if (result && !result.error) {

@@ -63,6 +63,16 @@
     #weatherBanner .sub { font-size: 0.82rem; opacity: 0.85; margin-top: 2px; }
     @keyframes bannerPulse { 0%,100%{ opacity: 0.85 } 50%{ opacity: 1 } }
 
+    /* --- Тост входа в локацию --- */
+    #locToast {
+      position: fixed; top: 110px; left: 50%; transform: translateX(-50%); z-index: 14;
+      display: none; padding: 8px 20px; border-radius: 10px; font-size: 1.1rem; font-weight: 700;
+      background: rgba(13,17,23,0.8); border: 1px solid rgba(255,255,255,0.2);
+      text-shadow: 0 2px 6px #000; letter-spacing: 0.5px;
+      animation: locFade 2.6s ease forwards;
+    }
+    @keyframes locFade { 0%{opacity:0;transform:translateX(-50%) translateY(-8px)} 15%{opacity:1;transform:translateX(-50%) translateY(0)} 80%{opacity:1} 100%{opacity:0} }
+
     /* --- Экран смерти --- */
     #death {
       position: fixed; inset: 0; z-index: 30; display: none; align-items: center; justify-content: center;
@@ -83,10 +93,12 @@
     &nbsp;·&nbsp; <span id="clock" title="Игровое время">🕛 00:00</span>
     &nbsp;·&nbsp; <span id="weather" title="Погода">☀️ Ясно</span>
     <span id="sick" title="Вы больны" style="display:none;color:#86efac"> · 🤢 Болезнь</span>
+    <span id="locHud" style="color:#93c5fd"></span>
     &nbsp; <button id="logoutBtn" style="font:inherit;pointer-events:auto;cursor:pointer;background:rgba(233,69,96,0.25);color:#fff;border:1px solid rgba(233,69,96,0.5);border-radius:7px;padding:2px 8px;font-size:0.78rem">Выйти</button>
   </div>
 
   <div id="weatherBanner"></div>
+  <div id="locToast"></div>
 
   <div class="hint" style="display:none" id="hint">
     Движение: WASD / стрелки<br>Атака: Пробел · Чат: Enter
@@ -259,6 +271,33 @@
         banner.style.display = 'none';
       }
     }
+
+    // --- Локации -----------------------------------------------------------
+    let currentLocId = null;
+    function locationAt(x, y) {
+      for (const l of (worldConfig.locations || [])) {
+        if (x >= l.x && x <= l.x + l.w && y >= l.y && y <= l.y + l.h) return l;
+      }
+      return null;
+    }
+    function updateLocation() {
+      const l = locationAt(me.x, me.y);
+      const id = l ? l.id : null;
+      if (id === currentLocId) return;
+      currentLocId = id;
+      const hud = document.getElementById('locHud');
+      if (l) {
+        hud.textContent = ' · 📍 ' + l.name;
+        const toast = document.getElementById('locToast');
+        toast.textContent = '📍 ' + l.name;
+        toast.style.color = l.color || '#93c5fd';
+        toast.style.display = 'block';
+        toast.style.animation = 'none'; void toast.offsetWidth; toast.style.animation = '';
+        setTimeout(() => { toast.style.display = 'none'; }, 2600);
+      } else {
+        hud.textContent = '';
+      }
+    }
     function showDeath() {
       const el = document.getElementById('death');
       el.style.display = 'flex';
@@ -353,6 +392,8 @@
         me.dir = Math.atan2(dy, dx);
       }
 
+      updateLocation();   // показываем подсказку при входе в зону
+
       // отправляем позицию серверу ~20 раз в секунду
       if (ws && ws.readyState === WebSocket.OPEN && now - lastSent > 50) {
         ws.send(JSON.stringify({ type: 'move', x: me.x, y: me.y, dir: me.dir }));
@@ -433,6 +474,31 @@
       ctx.lineTo(sx(0, world.height), sy(0, world.height));
       ctx.closePath();
       ctx.stroke();
+
+      // --- Локации (именованные зоны) -------------------------------------
+      for (const l of (worldConfig.locations || [])) {
+        ctx.beginPath();
+        ctx.moveTo(sx(l.x, l.y), sy(l.x, l.y));
+        ctx.lineTo(sx(l.x + l.w, l.y), sy(l.x + l.w, l.y));
+        ctx.lineTo(sx(l.x + l.w, l.y + l.h), sy(l.x + l.w, l.y + l.h));
+        ctx.lineTo(sx(l.x, l.y + l.h), sy(l.x, l.y + l.h));
+        ctx.closePath();
+        ctx.fillStyle = (l.color || '#38bdf8') + '22';
+        ctx.fill();
+        ctx.strokeStyle = (l.color || '#38bdf8') + 'aa';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        // название по центру зоны
+        const cxl = sx(l.x + l.w / 2, l.y + l.h / 2);
+        const cyl = sy(l.x + l.w / 2, l.y + l.h / 2);
+        ctx.font = '600 14px Segoe UI, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+        ctx.strokeText(l.name, cxl, cyl);
+        ctx.fillStyle = '#fff';
+        ctx.fillText(l.name, cxl, cyl);
+      }
 
       // --- Убежища (безопасные зоны) --------------------------------------
       const sporeAlert = weather.type === 'spores';
